@@ -1,0 +1,217 @@
+package kmeans;
+
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Date;
+
+
+
+import java.util.Iterator;
+import java.util.List;
+
+
+import org.apache.hadoop.hbase.HColumnDescriptor;
+import org.apache.hadoop.hbase.HTableDescriptor;
+import org.apache.hadoop.hbase.KeyValue;
+import org.apache.hadoop.hbase.client.Get;
+import org.apache.hadoop.hbase.client.HBaseAdmin;
+import org.apache.hadoop.hbase.client.HTable;
+import org.apache.hadoop.hbase.client.Result;
+import org.apache.hadoop.hbase.client.ResultScanner;
+import org.apache.hadoop.hbase.client.Scan;
+import org.apache.hadoop.hbase.filter.BinaryPrefixComparator;
+import org.apache.hadoop.hbase.filter.CompareFilter.CompareOp;
+import org.apache.hadoop.hbase.filter.Filter;
+import org.apache.hadoop.hbase.filter.FilterList;
+import org.apache.hadoop.hbase.filter.PrefixFilter;
+import org.apache.hadoop.hbase.filter.RowFilter;
+import org.apache.hadoop.hbase.filter.SubstringComparator;
+import org.apache.hadoop.hbase.util.Bytes;
+
+
+
+
+
+
+
+
+
+
+
+
+
+import Common.AbstractTable;
+import Common.Column;
+import collection.Constants;
+
+public class KmeansTable extends AbstractTable{
+	private static final String tableName = "kmeans";
+	
+	public static final byte[] INFO_CF = "info".getBytes();
+	
+	public static final byte[] POIS_COL = "pois".getBytes();
+	
+	
+	public static final byte[] CLUSTER_CF = "cluster".getBytes();
+	
+	public static final byte[] CENTER_COL = "center".getBytes();
+	
+	public static final byte[] INCLUDE_COL = "include".getBytes();
+	
+	public KmeansTable(){
+		try{
+			HBaseAdmin hAdmin = new HBaseAdmin(Constants.conf);
+			if(hAdmin.tableExists(tableName)){
+				//do nothing
+			}
+			else{
+				HColumnDescriptor des = new HColumnDescriptor(INFO_CF);
+				des.setMaxVersions(Integer.MAX_VALUE);
+				HColumnDescriptor des2 = new HColumnDescriptor(CLUSTER_CF);
+				HTableDescriptor t = new HTableDescriptor(tableName);
+				
+				t.addFamily(des);
+				t.addFamily(des2);
+				hAdmin.createTable(t);
+				
+			}
+			hAdmin.close();
+			
+			hTable = new HTable(Constants.conf, tableName);
+		
+		}catch(Exception e){
+			e.printStackTrace();
+		}
+	}
+	
+	
+	
+	public static byte[] generateRowKey(int zoom, double titleX, double titleY){
+		String RowKey = zoom + Constants.SEPARATER + titleX + 
+				 Constants.SEPARATER + titleY;
+		return Bytes.toBytes(RowKey);
+	}
+	
+	/**
+	 * @author ytt
+	 * 将不同zoom下聚合后的结果存到数据库
+	 * 
+	 * */
+	public Boolean setCluster(int zoom, double titleX, double titleY, String cluster, String center , Date timestamp){
+		byte[] rowKey = generateRowKey(zoom, titleX, titleY);
+		List<KeyValue> kvs = new ArrayList<KeyValue>();
+		kvs.add(new KeyValue(rowKey, CLUSTER_CF, CENTER_COL, Bytes.toBytes(center)));
+		kvs.add(new KeyValue(rowKey, CLUSTER_CF, INCLUDE_COL, Bytes.toBytes(cluster)));
+		System.out.println("setcluster is here");
+		return this.put(rowKey, timestamp, kvs);
+	}
+	
+	
+	
+	//新增数据
+	public boolean setPonit(int zoom, double titleX, double titleY, String pointxy,Date timestamp){
+		byte[] rowKey = generateRowKey(zoom, titleX, titleY);
+		
+		List<Column> columns = new ArrayList<Column>();
+		columns.add(new Column(INFO_CF, POIS_COL));
+		Result rs = this.get(rowKey, timestamp, null, columns, true);
+		List<String> keyList = new ArrayList<String>();
+		if(rs != null){
+			if(rs.getValue(INFO_CF, POIS_COL) != null){
+				for(KeyValue kvs : rs.list()){
+					String[] keyString = kvs.getKeyString().split(",");
+					for(String poi : keyString){
+						keyList.add(poi);
+					}
+				}
+			}
+			
+		}
+		
+		keyList.add(pointxy);
+		
+		List<KeyValue> keyValues = new ArrayList<KeyValue>();
+		keyValues.add(new KeyValue(rowKey, INFO_CF, POIS_COL, Bytes.toBytes(keyList.toString())));
+		return this.put(rowKey, timestamp, keyValues);
+	}
+	
+	
+	//得到某一个zoom下所有的点集合
+	public ResultScanner getResource(int zoom){
+		 
+		//Scan scan = new Scan();
+		Filter filter = new RowFilter(CompareOp.EQUAL, new BinaryPrefixComparator(Bytes.toBytes(zoom + Constants.SEPARATER)));
+		FilterList filterList = new FilterList();
+		filterList.addFilter(filter);
+		
+		List<Column> colList = new ArrayList<Column>();
+		colList.add(new Column(INFO_CF, POIS_COL));
+		List<byte[]> famList = new ArrayList<byte[]>(); 
+		famList.add(INFO_CF);
+		
+		ResultScanner rScanner = this.scan(null, famList, colList, filterList);
+		if(rScanner == null){
+			System.out.println("rscanner is null");
+		} 
+		try{
+			rScanner.close();
+		}catch(Exception e){
+			e.printStackTrace();
+		}
+		return rScanner;
+		
+		
+	}
+	
+	
+	
+	public Result getResourceone(int zoom, double titleX,double titleY){
+		
+		Result result = null;
+		List<Column> colList = new ArrayList<Column>();
+		colList.add(new Column(INFO_CF, POIS_COL));
+		try {
+			result =  this.get(generateRowKey(zoom, titleX, titleY), null, colList, 2);
+		} catch (IOException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}
+		return result;
+	}
+	
+	
+	public static void main(String[] args){
+		
+		KmeansTable kms = new KmeansTable();
+		ResultScanner rScanner = kms.getResource(3);
+		System.out.println("result is  start");
+		System.out.println(rScanner.getClass());
+		if(rScanner != null){
+			System.out.println("rescanner is not null");
+		}
+		
+		
+		
+		
+		for(Result result : rScanner){/////######？？？为什么这句不管用
+			if(result != null){
+				System.out.println("result is not null");
+			}
+			else {
+				System.out.println("result is null");
+			}
+			System.out.println(result.getRow().toString());
+			for(KeyValue kValue : result.list()){
+				System.out.println("jofjs");
+				String keyStrings = Bytes.toString(kValue.getValue());
+				System.out.println(keyStrings);
+			}
+			String keyStrings = Bytes.toString(result.getRow());
+			
+		}
+		
+		
+		
+		
+	}
+}

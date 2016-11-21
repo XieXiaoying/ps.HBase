@@ -1,0 +1,35 @@
+package Web;
+
+import static org.junit.Assert.*;
+
+import java.io.IOException;
+import java.text.ParseException;
+import java.text.SimpleDateFormat;
+import java.util.Date;
+
+import org.junit.Before;
+import org.junit.Test;
+
+public class WebViewTest {
+
+	@Before
+	public void setUp() throws Exception {
+	}
+
+	@Test
+	public void testSetPoiFpm() {
+		fail("Not yet implemented");
+	}
+
+	@Test
+	public void testGetPoiFpm() throws ParseException, IOException {
+		WebView wv = new WebView(null);
+		Date starttime = null;
+		String timeString  = "2015-01-01";
+		SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd");
+		starttime = sdf.parse(timeString);
+		System.out.println(wv.getPoiFpm("10010521", starttime, null, null));
+		
+	}
+
+}

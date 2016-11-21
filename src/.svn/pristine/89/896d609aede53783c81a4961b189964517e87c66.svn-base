@@ -1,0 +1,525 @@
+package Web;
+
+import java.io.BufferedReader;
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileReader;
+import java.io.IOException;
+import java.io.InputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.text.ParseException;
+import java.text.SimpleDateFormat;
+import java.util.ArrayList;
+import java.util.Date;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
+import net.sf.json.JSONObject;
+
+import org.apache.hadoop.hbase.client.Result;
+import org.apache.hadoop.hbase.client.ResultScanner;
+import org.apache.hadoop.hbase.filter.FilterList;
+import org.apache.hadoop.hbase.filter.SingleColumnValueExcludeFilter;
+import org.apache.hadoop.hbase.util.Base64;
+import org.apache.hadoop.hbase.util.Bytes;
+import org.apache.hadoop.hbase.filter.CompareFilter;
+import org.apache.log4j.Logger;
+
+
+
+
+import Common.Column;
+import collection.CollectionPicTable;
+import collection.UploadPicInfo;
+
+public class WebView{
+	static Logger logger = Logger.getLogger(WebView.class);
+	// 图片收集表
+	private CollectionPicTable cpt = null;
+
+	// POI计算
+	private POIComputeInterface pci = null;
+
+	// POI表
+	private POITable pt = null;
+
+	public WebView(POIComputeInterface pci) {
+		this.cpt = new CollectionPicTable();
+		this.pt = new POITable();
+		this.pci = pci;
+	}
+	
+	
+	
+	
+/*	public void importPOIInfo(){
+		
+		File file = new File("resource/txt/newpoiinfo.txt");
+        BufferedReader reader = null;
+        try {
+        	reader = new BufferedReader(new FileReader(file));
+            String tempString = null;
+
+            while ((tempString = reader.readLine()) != null) {
+                String line[] = tempString.split("\t");
+                String poi = line[0];
+                double lat = Double.parseDouble(line[1]);
+                double lon = Double.parseDouble(line[2]);
+                int min_level = Integer.parseInt(line[3]);
+                int max_level = Integer.parseInt(line[4]);
+                setPOIInfo(poi, lon, lat, min_level, max_level);
+                System.out.println("newpoiinfo import success~~");
+            }
+            reader.close();
+        } catch (IOException e) {
+            e.printStackTrace();
+        } 
+        
+        */
+        
+        
+        //注释掉，虚拟的poi中的pm值
+        //
+       /* File file2 = new File("resource/txt/newpoipm.txt");
+        BufferedReader reader2 = null;
+        try {
+            reader2 = new BufferedReader(new FileReader(file2));
+            String tempString = null;
+            while ((tempString = reader2.readLine()) != null) {
+                String line[] = tempString.split("\t");
+                String poi = line[0];
+                
+                SimpleDateFormat df = new SimpleDateFormat("yyyy/MM/dd");
+                Date date = null;
+                String dateString = line[1]; 
+                try {
+                  date = df.parse(dateString); 
+                } 
+                catch (Exception e) { 
+                	e.printStackTrace();
+                }          
+                
+                int fpm = Integer.parseInt(line[2]);
+                
+                setDayFpm(poi, date, fpm);
+            }
+            reader.close();
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+	} */
+
+	public void importFromCollectionPicTable() throws IOException {
+		// 设置扫描的列族
+		List<byte[]> cfList = new ArrayList<byte[]>();
+		cfList.add(CollectionPicTable.INFO_CF);
+		cfList.add(CollectionPicTable.POI_CF);
+
+		ResultScanner rs = cpt.scan(null, cfList, null, null);
+
+		if (rs != null) {
+			for (Result r : rs) {
+				byte[] rowkey = r.getRow();
+				UploadPicInfo uploadPicInfo = cpt
+						.retrieveInfoFromRowKey(rowkey);
+				if (uploadPicInfo == null) {
+					System.out.println("UploadPicInfo is null for "
+							+ Bytes.toString(rowkey));
+					continue;
+				}
+				double lon = uploadPicInfo.getLon();
+				double lat = uploadPicInfo.getLat();
+				
+				
+				if (lon != -1 && lat != -1) {
+					String poi = Bytes.toString(r.getValue(
+							CollectionPicTable.POI_CF,
+							CollectionPicTable.POI_COL));
+					poi = poi.trim();
+
+					// 图片值
+					byte[] content = r.getValue(CollectionPicTable.INFO_CF,
+							CollectionPicTable.PIC_COL);
+					// PM2.5值
+					byte[] fpm = r.getValue(CollectionPicTable.INFO_CF,
+							CollectionPicTable.FPM_COL);
+					if (content != null && fpm != null && poi != null) {
+						Date timestamp = new Date(uploadPicInfo.getUploadtime());
+						// 图片和PM2.5写入到POI表中
+						JSONObject pic = new JSONObject();
+						pic.accumulate("pic", Bytes.toString(content));
+						pic.accumulate("fpm", Bytes.toInt(fpm));
+						
+						if(pt.setPoiFpm(poi, timestamp, Bytes.toInt(fpm))){
+							System.out.println("set poiFpm is success!!");
+							
+						}
+						if (!setPic(poi, timestamp,Bytes.toBytes(pic.toString()))) {
+							System.out.println("some error happen for poi: "
+									+ poi);
+						}
+						
+						
+
+					}
+
+				}
+			}
+
+			rs.close();
+		}
+	}
+	
+	/*
+	*//**
+	 * 计算并写入图片收集表中所有数据的POI结果
+	 * 并将POI,图片和图片PM2.5值导入到POI表中
+	 * @throws IOException 
+	 *//*
+	public void computePOI() throws IOException{
+		Date before = new Date();
+		// 设置扫描的列族
+		List<byte[]> cfList = new ArrayList<byte[]>();
+		cfList.add(CollectionPicTable.INFO_CF);
+		cfList.add(CollectionPicTable.POI_CF);
+		// poi值为空
+		SingleColumnValueExcludeFilter f = new SingleColumnValueExcludeFilter(
+				CollectionPicTable.POI_CF, CollectionPicTable.POI_COL,
+				CompareFilter.CompareOp.EQUAL, (byte[])null);
+		
+		ResultScanner rs = cpt.scan(null,cfList, null, new FilterList(f));
+		
+		int rowNum = 0;
+		if (rs != null) {
+			for (Result r : rs) {
+				rowNum++;
+				byte[] rowkey = r.getRow();
+				UploadPicInfo uploadPicInfo = cpt.retrieveInfoFromRowKey(rowkey);
+				if(uploadPicInfo == null){
+					continue;
+				}
+				double lon = uploadPicInfo.getLon();
+				double lat = uploadPicInfo.getLat();
+				if (lon != -1 && lat != -1) {
+					// 计算POI,在袁龙运的webView里的有它的实现方法
+					String poi = pci.computePOI(lon, lat);
+					
+					if(poi != null){
+						List<KeyValue> kvs = new ArrayList<KeyValue>();
+						kvs.add(new KeyValue(rowkey, CollectionPicTable.POI_CF,
+								CollectionPicTable.POI_COL, Bytes.toBytes(poi)));
+						// 写入pic表
+						cpt.put(rowkey, null, kvs);
+
+						// 写入POI表
+						// 图片值
+						byte[] content = r.getValue(CollectionPicTable.INFO_CF,
+								CollectionPicTable.PIC_COL);
+						// PM2.5值
+						byte[] fpm = r.getValue(CollectionPicTable.INFO_CF,
+								CollectionPicTable.FPM_COL);
+						if (content != null && fpm != null && poi != null) {
+							Date timestamp = new Date(uploadPicInfo.getUploadtime());
+							// 精确到天
+							timestamp = new Date(timestamp.getYear(),
+									timestamp.getMonth(), timestamp.getDate(), 0, 0, 0);
+						
+							// 图片和PM2.5写入到POI表中
+							JSONObject pic = new JSONObject();
+							pic.accumulate("pic", Bytes.toString(content));
+							pic.accumulate("fpm", Bytes.toInt(fpm));
+							
+							setPic(poi, timestamp, Bytes.toBytes(pic.toString()));
+						}
+						
+					}
+					
+
+				}
+			}
+
+			rs.close();
+		}
+
+		Date after = new Date();
+		
+		logger.info("computePOI("+rowNum+" rows) in " + (after.getTime() - before.getTime()) + "ms");
+		
+		
+	}*/
+
+	/**
+	 * 
+	 * 计算某经纬度对应的poi_id
+	 * */
+	public void computerPOI(double lon, double lat){
+		pci.computePOI(lon, lat);
+	}
+	
+	
+	
+	/**
+	 * 扫描图片收集表获得所有POI值，没有则返回null
+	 * 
+	 * @return
+	 */
+	public Set<String> getAllPOI() {
+		Date before = new Date();
+		Set<String> result =  cpt.getAllPOI();
+		Date after = new Date();
+		
+		logger.info("getAllPOI in " + (after.getTime() - before.getTime()) + "ms");
+		return result;
+		
+	}
+
+	/**
+	 * 从图片收集表中获得poi里的所有Map<日期，当天PM2.5值列表> 其中日期精确到天数 没有则返回null
+	 * 
+	 * 
+	 * @param poi
+	 * @return
+	 */
+	public Map<Date, List<Integer>> getPicFpmInPOI(String poi) {
+		Date before = new Date();
+		// 构造扫描所有具有POI的数据的扫描器
+		SingleColumnValueExcludeFilter f = new SingleColumnValueExcludeFilter(
+				CollectionPicTable.POI_CF, CollectionPicTable.POI_COL,
+				CompareFilter.CompareOp.EQUAL, Bytes.toBytes(poi));
+		f.setFilterIfMissing(true);
+		// 设置扫描的列族
+		List<byte[]> cfList = new ArrayList<byte[]>();
+		cfList.add(CollectionPicTable.POI_CF);
+		List<Column> columnList = new ArrayList<Column>();
+		columnList.add(new Column(CollectionPicTable.INFO_CF,CollectionPicTable.FPM_COL));
+		// 扫描结果
+		ResultScanner rs = cpt.scan(null, cfList, columnList, new FilterList(f));
+		if (rs != null) {
+			Map<Date, List<Integer>> results = new HashMap<Date, List<Integer>>();
+			for (Result r : rs) {
+				//PM2.5值
+				byte[] fpm = r.getValue(CollectionPicTable.INFO_CF,
+						CollectionPicTable.FPM_COL);
+				if(fpm != null){
+					UploadPicInfo uploadPicInfo = cpt.retrieveInfoFromRowKey(r.getRow());
+					if(uploadPicInfo == null){
+						continue;
+					}
+					Date timestamp = new Date(uploadPicInfo.getUploadtime());
+					// 精确到天
+					timestamp = new Date(timestamp.getYear(),
+							timestamp.getMonth(), timestamp.getDate(), 0, 0, 0);					
+					
+					// 添加日期的fpm值
+					List<Integer> fpms;
+					if ((fpms = results.get(timestamp)) != null) {
+						fpms.add(Bytes.toInt(fpm));
+						results.put(timestamp, fpms);
+					} else {
+						fpms = new ArrayList<Integer>();
+						fpms.add(Bytes.toInt(fpm));
+						results.put(timestamp, fpms);
+					}
+
+				}
+			}// end for
+			rs.close();
+			
+			if(results.size() == 0){
+				return null;
+			}
+			Date after = new Date();
+			logger.info("getPicFpmInPOI in " + (after.getTime() - before.getTime()) + "ms");
+			return results;
+		}
+		
+		return null;
+
+	}
+
+	/**
+	 * 设置某poi某天的PM2.5值
+	 * @author ytt
+	 * @param poi
+	 * @param timestamp
+	 * @param fpm
+	 *            PM2.5值
+	 * @return
+	 * @throws IOException 
+	 */
+	public Boolean setPoiFpm(String poi, Date timestamp, int fpm) throws IOException {
+		return pt.setPoiFpm(poi, timestamp, fpm);
+	}
+
+	/**
+	 * 获得某POI某日期（精确到天）的fpm值,没有则返回-1
+	 * @author ytt
+	 * @param poi
+	 * @param timestamp
+	 * @return
+	 * @throws IOException 
+	 */
+	public List<JSONObject> getPoiFpm(String poi, Date starttime,Date stoptime, Boolean gradeSet) throws IOException {
+		Date before = new Date();
+		List<JSONObject> jsonObjects  = null;
+		jsonObjects =  pt.getPoiFpm(poi, starttime, stoptime, gradeSet);
+		Date after = new Date();
+		logger.info("getDayFpm in " + (after.getTime() - before.getTime()) + "ms");
+		
+		System.out.println(jsonObjects);
+		return jsonObjects;
+	}
+	
+	
+
+	/**
+	 * 添加某POI某日期（精确到天）的图片
+	 * 
+	 * @param poi
+	 * @param timestamp
+	 * @param content
+	 * @return
+	 * @throws IOException 
+	 */
+	public Boolean setPic(String poi, Date timestamp, byte[] content) throws IOException {
+		return pt.setPic(poi, timestamp, content);
+	}
+	
+    public long getPoiPicCount(String poi,Date timestamp ){
+    	return pt.getPoiPicCount(poi, timestamp);
+    }
+	
+	
+	/**
+	 * 获得符合poiPrefix的所有POI点某天的所有图片，没有则返回null
+	 * 若timestamp==null则不需要限定某天
+	 * @param poi
+	 * @return
+	 * @throws IOException 
+	 */
+	public List<JSONObject> getPic(String poiPrefix, Date timestamp) throws IOException {
+		Date before = new Date();
+		List<JSONObject> result =  pt.getPic(poiPrefix, timestamp, null, true);
+		Date after = new Date();
+		logger.info("getPic in " + (after.getTime() - before.getTime()) + "ms");
+		
+		return result;
+	}
+
+	/**
+	 * 设置某poi的信息
+	 * @param poi poi标识
+	 * @param lon 经度
+	 * @param lat 纬度
+	 * @param min_level 显示级别区间
+	 * @param max_level 
+	 * @return
+	 */
+
+	public Boolean setPOIInfo(String poi, double lon,double lat,String builder) {
+		return pt.setPOIInfo(poi,lon,lat,builder);
+	}
+
+	/**
+	 * 获得所有POI点的信息，没有则返回null
+	 * 
+	 * @param level
+	 * @return
+	 */
+	public Set<JSONObject> getAllPOIsInfo() {
+		Date before = new Date();
+		Set<JSONObject> result =  pt.getAllPOIsInfo();
+		Date after = new Date();
+		logger.info("getPOIsInfo in " + (after.getTime() - before.getTime()) + "ms");
+		
+		return result;
+	}
+	
+	
+	/**
+	 * @param args
+	 * @throws ParseException 
+	 * @throws IOException 
+	 */
+	public static void main(String[] args) throws ParseException, IOException {
+		POIComputeInterface POIi = null;
+		WebView wv = new WebView(POIi);
+		//导入图片
+		//wv.importPOIInfo();
+		//wv.importFromCollectionPicTable();
+		
+		//System.out.println("%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%");
+	
+		//测试单个poi的图片
+		/*List<JSONObject> jsonObjects = wv.getPic("10010521",null);
+		System.out.println(jsonObjects);
+		*/
+		
+		//测试图片的张数
+		/*
+		long count = wv.pt.getPoiPicCount("10010521", null);
+		System.out.println(count);*/
+		
+		
+		//测试读取照片的pm值以及照片
+	Date stoptime = null;	
+	Date starttime = null;
+	String timestopString = "2015-1-7";
+	String timeString  = "2015-1-1";
+	SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd");
+	starttime = sdf.parse(timeString);
+	stoptime = sdf.parse(timestopString);
+	
+	
+	//System.out.println("starttime" + starttimestamp.getTime() + " \n" + "stoptime " + stoptime.getTime());
+	System.out.println(wv.getPoiFpm("10010521", starttime, stoptime, true));
+	
+		
+/*
+		List<JSONObject> jsonObjects = wv.getPic("10010521", null);
+		System.out.println(jsonObjects);
+		Set<JSONObject> POIImgInfoJSON = new HashSet<JSONObject>();
+		POIImgInfoJSON.addAll(POIImgInfoJSON);
+		System.out.println(POIImgInfoJSON);*/
+	
+		
+		//测试getAllPOIsInfo()
+		/*Set<JSONObject> allPOIInfo = wv.getPOIsInfo();
+		Iterator<JSONObject> joIterator = allPOIInfo.iterator();
+		while(joIterator.hasNext()){
+			JSONObject jo = joIterator.next();
+			System.out.println(jo);
+		}
+		
+		*/
+		
+		//测试getpoipm
+		/*Date starttime = new Date(2015, 1, 1, 0, 0, 0);
+		Date stoptime = new Date(2015, 2, 1, 0, 0, 0);
+		System.out.println(starttime);
+		List<JSONObject> result = wv.getPoiFpm("10010521", starttime, stoptime, true);
+		System.out.println(result);*/
+		
+		/*wv.getDaysFpm("10010521", 7);
+		
+		System.out.println("--------------------------------------------------------------------------------");
+		*/
+		/*set = wv.getPic("10010112", null);
+		for(byte[] pic : set){
+			System.out.println(Bytes.toString(pic));
+		}
+		
+		System.out.println("#################################################");
+		
+		set = wv.getPic("10010521",null);
+		for(byte[] pic :set){
+			System.out.println(Bytes.toString(pic));
+		}*/
+		
+		
+	}
+
+}

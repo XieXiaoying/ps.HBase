@@ -1,0 +1,172 @@
+package Trajectory;
+
+import java.io.BufferedReader;
+import java.io.File;
+import java.io.FileReader;
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
+
+import org.apache.hadoop.hbase.KeyValue;
+import org.apache.hadoop.hbase.client.HTable;
+import org.apache.hadoop.hbase.client.Result;
+import org.apache.hadoop.hbase.util.Bytes;
+import org.jruby.compiler.ir.operands.Array;
+
+import Common.AbstractTable;
+import collection.Constants;
+
+import com.sun.istack.logging.Logger;
+/**
+ * @author ytt
+ * 2015-3-26
+ * 创建格子表
+ * 
+ * */
+public class GridTable extends AbstractTable{
+	Logger logger = Logger.getLogger(GridTable.class);
+	
+	private static final byte[] INFO_CF = "info".getBytes();
+	private static final byte[] GRID_COL = "gridid".getBytes();
+	private static String[] family = {"info"};
+	
+	private static final String tableName = "grid";
+	public GridTable(){
+		try{
+			createTable(Constants.conf, tableName, family);
+			hTable = new HTable(Constants.conf, tableName);
+		}catch(Exception e){
+			e.printStackTrace();
+		}
+		
+	}
+	
+	
+	public byte[] generateRowKey(double latUpLeft, double lonUpLeft, double LatBtmRight,
+			double lonBtmRight){
+		String rowKey = latUpLeft + Constants.SEPARATER + lonUpLeft + Constants.SEPARATER
+				+ LatBtmRight + Constants.SEPARATER + lonBtmRight;
+		
+		return rowKey.getBytes();
+	}
+	
+	/**
+	 * 
+	 * 根据经纬度找到其对应的格子编号
+	 * @param lat
+	 * @param lon
+	 * 因为格子的对角线上的经纬度有一定的规律
+	 * 左上角：（39.958713,116.358413）
+	 * 右下角：（39.959713,116.357413）
+	 * @retune String 返回格子id
+	 * 都是精确到小数点后六位，且最后的三个数都是一定的
+	 * */
+	public String findGridId(double lat, double lon) throws IOException{
+		String latString = String.valueOf(lat);
+		String lonString = String.valueOf(lon);
+		
+		int indexlat = latString.indexOf(".") + 4;
+		int indexlon = lonString.indexOf(".") + 4;
+		
+		String latbefor = latString.substring(0, indexlat);
+		String latlater = latString.substring(indexlat);
+		String lonbefor = lonString.substring(0, indexlon);
+		String lonlater = lonString.substring(indexlon);
+		double latUpLeft;
+		double latBtmRight;
+		double lonUpLeft;
+		double lonBtmRight;
+		
+		System.out.println(latbefor + "   " + lonbefor);
+		System.out.println(latlater + "   " + lonlater);
+		
+		if(Integer.valueOf(latlater) >= 713){
+			latUpLeft = Double.valueOf(latbefor + "713");
+			latBtmRight = Double.valueOf(latbefor) + 0.001713;
+			
+		}
+		
+		else{
+			latUpLeft = Double.valueOf(latbefor) - 0.001 + 0.000713;
+			latBtmRight = Double.valueOf(latbefor) + 0.000713;
+		}
+		
+		
+		if(Integer.valueOf(lonlater) >= 413){
+			lonUpLeft = Double.valueOf(lonbefor) + 0.001413;
+			lonBtmRight = Double.valueOf(lonbefor) + 0.000413;
+		}
+		else{
+			lonUpLeft = Double.valueOf(lonbefor) + 0.000413;
+			lonBtmRight = Double.valueOf(lonbefor) - 0.001 + 0.000413;
+		}
+		
+		//System.out.println(latUpLeft + "  " + lonUpLeft + "  " + latBtmRight + "  " + lonBtmRight);
+		Result rs = get(generateRowKey(latUpLeft, lonUpLeft, latBtmRight, lonBtmRight), 
+				null, null, null, false);
+		
+		String gridId = null;
+		for(KeyValue kv : rs.list()){
+			gridId = Bytes.toString(kv.getValue());
+		}
+		
+		System.out.println(gridId);
+		return gridId;
+		
+		
+		
+		
+	}
+	
+	
+	
+	
+	/**
+	 * 从文件中导入数据到grid表中
+	 * 
+	 * 
+	 **/
+	public void importFormFile(File file){
+		BufferedReader reader = null;
+		
+		try{
+			reader = new BufferedReader(new FileReader(file));
+			String tempString = null;
+			
+			while((tempString = reader.readLine()) != null){
+				String[] line = tempString.split("\t");
+				
+				String gridId = line[0];
+				double latUpLeft = Double.parseDouble(line[1]);
+				double lonUpLeft = Double.parseDouble(line[2]);
+				double latBtmRight = Double.parseDouble(line[3]);
+				double lonBtmRight = Double.parseDouble(line[4]);
+				
+				List<KeyValue> keyValues = new ArrayList<KeyValue>();
+				
+				keyValues.add(new KeyValue(generateRowKey(latUpLeft, lonUpLeft, latBtmRight, lonBtmRight), 
+						INFO_CF, GRID_COL, Bytes.toBytes(gridId)));
+				put(generateRowKey(latUpLeft, lonUpLeft, latBtmRight, lonBtmRight), null, keyValues);
+				
+				
+				
+			}
+			reader.close();
+		}
+		catch(Exception e){
+			e.printStackTrace();
+		}
+		
+	}
+	
+	
+	public static void main(String[] args) throws IOException{
+		GridTable gridTable = new GridTable();
+		File file = new File("resource/txt/grid_xy.txt");
+		//gridTable.importFormFile(file);
+		
+		gridTable.findGridId(39.958782, 116.357793);
+	}
+	
+	
+}

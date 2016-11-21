@@ -1,0 +1,373 @@
+package Web;
+
+import java.io.BufferedReader;
+import java.io.File;
+import java.io.FileReader;
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Date;
+import java.util.List;
+
+import net.sf.json.JSONObject;
+
+import org.apache.hadoop.hbase.KeyValue;
+import org.apache.hadoop.hbase.client.HTable;
+import org.apache.hadoop.hbase.client.Result;
+import org.apache.hadoop.hbase.client.ResultScanner;
+import org.apache.hadoop.hbase.client.Scan;
+import org.apache.hadoop.hbase.filter.BinaryPrefixComparator;
+import org.apache.hadoop.hbase.filter.CompareFilter.CompareOp;
+import org.apache.hadoop.hbase.filter.Filter;
+import org.apache.hadoop.hbase.filter.FilterList;
+import org.apache.hadoop.hbase.filter.RowFilter;
+import org.apache.hadoop.hbase.util.Bytes;
+import org.jruby.compiler.ir.operands.Array;
+
+import Common.AbstractTable;
+import Common.Column;
+import collection.Constants;
+
+import com.sun.istack.logging.Logger;
+/**
+ * @author ytt
+ * 2015-4-23
+ * 创建格子表
+ * 
+ * */
+public class GridPoiTable extends AbstractTable{
+	Logger logger = Logger.getLogger(GridPoiTable.class);
+	
+	private static long gridid;
+	private static final byte[] INFO_CF = "info".getBytes();
+	private static final byte[] GRIDPOI_COL = "gridPoiId".getBytes();
+	private static String[] family = {"info"};
+	
+	private static final String tableName = "gridPoi";
+	public GridPoiTable(){
+		try{
+			createTable(Constants.conf, tableName, family);
+			hTable = new HTable(Constants.conf, tableName);
+		}catch(Exception e){
+			e.printStackTrace();
+		}
+		
+	}
+	
+	
+	public byte[] generateRowKey(double latUpLeft, double lonUpLeft, double LatBtmRight,
+			double lonBtmRight){
+		String rowKey = latUpLeft + Constants.SEPARATER + lonUpLeft + Constants.SEPARATER
+				+ LatBtmRight + Constants.SEPARATER + lonBtmRight;
+		
+		return rowKey.getBytes();
+	}
+	
+	/**
+	 * 由经纬度，计算所在的格子的左上角和右下角的经纬度
+	 * @author ytt
+	 * 2015/4/23
+	 * @param double lon
+	 * @param double lat
+	 
+	 * 
+	 * */
+	
+	public double[] computeGridxy(double lat,double lon){
+		double[] gridxy = new double[4];
+		String latString = String.valueOf(lat);
+		String lonString = String.valueOf(lon);
+		
+		int indexlat = latString.indexOf(".") + 4;
+		int indexlon = lonString.indexOf(".") + 4;
+		
+		String latbefor = latString.substring(0, indexlat);
+		String latlater = latString.substring(indexlat);
+		String lonbefor = lonString.substring(0, indexlon);
+		String lonlater = lonString.substring(indexlon);
+		double latUpLeft;
+		double latBtmRight;
+		double lonUpLeft;
+		double lonBtmRight;
+		
+		System.out.println(latbefor + "   " + lonbefor);
+		System.out.println(latlater + "   " + lonlater);
+		
+		if(Integer.valueOf(latlater) >= 713){
+			latUpLeft = Double.valueOf(latbefor + "713");
+			latBtmRight = Double.valueOf(latbefor) + 0.001713;
+			
+		}
+		
+		else{
+			latUpLeft = Double.valueOf(latbefor) - 0.001 + 0.000713;
+			latBtmRight = Double.valueOf(latbefor) + 0.000713;
+		}
+		
+		
+		if(Integer.valueOf(lonlater) >= 413){
+			lonUpLeft = Double.valueOf(lonbefor) + 0.001413;
+			lonBtmRight = Double.valueOf(lonbefor) + 0.000413;
+		}
+		else{
+			lonUpLeft = Double.valueOf(lonbefor) + 0.000413;
+			lonBtmRight = Double.valueOf(lonbefor) - 0.001 + 0.000413;
+		}
+		
+		gridxy[0] = latUpLeft;
+		gridxy[1] = lonUpLeft;
+		gridxy[2] = latBtmRight;
+		gridxy[3] = lonBtmRight;
+		return gridxy;
+	}
+	
+	
+	
+	/****
+	 * 存入格子信息
+	 * @author ytt
+	 * @param double latUpLeft
+	 * @param double lonUpLeft,
+	 * @param double latBtmRight
+	 * @param double lonBtmRight, 
+	 * @param long gridid, 
+	 * @param String poiString 
+	 * 
+	 * 
+	 * */
+	public boolean setGrid(double latUpLeft, double lonUpLeft, double latBtmRight, 
+			double lonBtmRight, long gridid, String poiString, Date timestamp){
+		
+		JSONObject jsonObject = new JSONObject();
+		jsonObject.accumulate("gridId", gridid);
+		jsonObject.accumulate("poiId", poiString);
+		jsonObject.accumulate("time", timestamp);
+		
+		List<KeyValue> keyValues = new ArrayList<KeyValue>();
+		
+		keyValues.add(new KeyValue(generateRowKey(latUpLeft, lonUpLeft, latBtmRight, lonBtmRight),
+				INFO_CF, GRIDPOI_COL, Bytes.toBytes(jsonObject.toString())));
+		if(!put(generateRowKey(latUpLeft, lonUpLeft, latBtmRight, lonBtmRight), null, keyValues)){
+			return false;
+		}
+		return true;
+		
+		
+	}
+	
+	
+	
+	public boolean setGrid(double lon, double lat, Date timestamp){
+		double[] gridxy = computeGridxy(lat, lon);
+		Scan scan = new Scan(generateRowKey(gridxy[0],gridxy[1],gridxy[2],gridxy[3]));
+		
+		List<Column> columnList = new ArrayList<Column>();
+		columnList.add(new Column(INFO_CF, GRIDPOI_COL));
+		ResultScanner result = this.scan(scan, null, columnList, null);
+		Date time = timestamp;
+		gridid += 1;
+		String poiString = ComputePOI.computePOI(lon, lat);
+		if(!setGrid(gridxy[0],gridxy[1],gridxy[2],gridxy[3],gridid,poiString,time)){
+			return false;
+		}
+			
+		return true;
+		
+	}
+	
+	
+	/***
+	 * 查看是否存在站点格子，如果不存在则新建站点返回新的POI
+	 * @author ytt
+	 * 2015/4/23
+	 * @param double lon
+	 * @param double lat
+	 * 
+	 * */
+	public String GridIsHas(double lon, double lat){
+		double[] gridxy = computeGridxy(lat, lon);
+		Scan scan = new Scan(generateRowKey(gridxy[0],gridxy[1],gridxy[2],gridxy[3]));
+		
+		List<Column> columnList = new ArrayList<Column>();
+		columnList.add(new Column(INFO_CF, GRIDPOI_COL));
+		ResultScanner result = this.scan(scan, null, columnList, null);
+		if( result == null){
+			String poiString = ComputePOI.computePOI(lon, lat);
+			//setGrid(gridxy[0],gridxy[1],gridxy[2],gridxy[3],gridid,poiString,time);
+			return poiString;
+		}
+		else{
+			for(Result rs : result){
+				for(KeyValue kv : rs.list()){
+					JSONObject jsonObject = JSONObject.fromObject(Bytes.toString(kv.getKey()));
+					return jsonObject.getString("poiId");
+				}
+			}
+		}
+		return null;
+	}
+	
+	
+	/**
+	 * 
+	 * 根据经纬度找到其对应的格子编号
+	 * @param lat
+	 * @param lon
+	 * 因为格子的对角线上的经纬度有一定的规律
+	 * 左上角：（39.958713,116.358413）(纬度，经度)
+	 * 右下角：（39.959713,116.357413）
+	 * @retune String 返回格子id
+	 * 都是精确到小数点后六位，且最后的三个数都是一定的
+	 * */
+	public String findGridId(double lat, double lon) throws IOException{
+		String latString = String.valueOf(lat);
+		String lonString = String.valueOf(lon);
+		
+		int indexlat = latString.indexOf(".") + 4;
+		int indexlon = lonString.indexOf(".") + 4;
+		
+		String latbefor = latString.substring(0, indexlat);
+		String latlater = latString.substring(indexlat);
+		String lonbefor = lonString.substring(0, indexlon);
+		String lonlater = lonString.substring(indexlon);
+		double latUpLeft;
+		double latBtmRight;
+		double lonUpLeft;
+		double lonBtmRight;
+		
+		System.out.println(latbefor + "   " + lonbefor);
+		System.out.println(latlater + "   " + lonlater);
+		
+		if(Integer.valueOf(latlater) >= 713){
+			latUpLeft = Double.valueOf(latbefor + "713");
+			latBtmRight = Double.valueOf(latbefor) + 0.001713;
+			
+		}
+		
+		else{
+			latUpLeft = Double.valueOf(latbefor) - 0.001 + 0.000713;
+			latBtmRight = Double.valueOf(latbefor) + 0.000713;
+		}
+		
+		
+		if(Integer.valueOf(lonlater) >= 413){
+			lonUpLeft = Double.valueOf(lonbefor) + 0.001413;
+			lonBtmRight = Double.valueOf(lonbefor) + 0.000413;
+		}
+		else{
+			lonUpLeft = Double.valueOf(lonbefor) + 0.000413;
+			lonBtmRight = Double.valueOf(lonbefor) - 0.001 + 0.000413;
+		}
+		
+		//System.out.println(latUpLeft + "  " + lonUpLeft + "  " + latBtmRight + "  " + lonBtmRight);
+		Result rs = get(generateRowKey(latUpLeft, lonUpLeft, latBtmRight, lonBtmRight), 
+				null, null, null, false);
+		
+		
+		String gridId = null;
+		for(KeyValue kv : rs.list()){
+			gridId = Bytes.toString(kv.getValue());
+		}
+		
+		System.out.println(gridId);
+		return gridId;
+		
+		
+		
+		
+	}
+	
+	/**
+	 * @author ytt
+	 * 返回附近的poi站点id
+	 * 
+	 * 
+	 * */
+	public List<String> findNearPoiId(double lon, double lat, double distans){
+		List<String> nearPoi = new ArrayList<String>();
+		double[] uplonlat = computeGridxy(lat + distans, lon - distans);
+		double lonup = uplonlat[1];
+		double latup = uplonlat[0];
+		
+		
+		double[] btmlonlat = computeGridxy(lat - distans, lon + distans);
+		double lonup2 = uplonlat[1];
+		double latup2 = uplonlat[0];
+		
+		Filter filter = new RowFilter(CompareOp.LESS_OR_EQUAL, 
+					new BinaryPrefixComparator(Bytes.toBytes(latup + Constants.SEPARATER + lonup)));
+		
+		Filter filter2 = new RowFilter(CompareOp.GREATER_OR_EQUAL, new 
+				BinaryPrefixComparator(Bytes.toBytes(latup2 + Constants.SEPARATER + lonup2)));
+		
+		FilterList filterList = new FilterList();
+		filterList.addFilter(filter);
+		filterList.addFilter(filter2);
+		
+		
+		List<Column> columns = new ArrayList<Column>();
+		columns.add(new Column(INFO_CF, GRIDPOI_COL));
+		Scan scan = new Scan();
+		ResultScanner scanner = this.scan(scan, null, columns, filterList);
+		for(Result result : scanner){
+			for(KeyValue kv : result.list()){
+				JSONObject jsonObject = JSONObject.fromObject(Bytes.toString(kv.getKey()));
+				nearPoi.add(jsonObject.getString("poiId"));
+			}
+		}
+		
+		return nearPoi;
+		
+	}
+	
+	
+	
+	/*
+	//**
+	 * 从文件中导入数据到grid表中
+	 * 
+	 * 
+	 **//*
+	public void importFormFile(File file){
+		BufferedReader reader = null;
+		
+		try{
+			reader = new BufferedReader(new FileReader(file));
+			String tempString = null;
+			
+			while((tempString = reader.readLine()) != null){
+				String[] line = tempString.split("\t");
+				
+				String gridId = line[0];
+				double latUpLeft = Double.parseDouble(line[1]);
+				double lonUpLeft = Double.parseDouble(line[2]);
+				double latBtmRight = Double.parseDouble(line[3]);
+				double lonBtmRight = Double.parseDouble(line[4]);
+				
+				List<KeyValue> keyValues = new ArrayList<KeyValue>();
+				
+				keyValues.add(new KeyValue(generateRowKey(latUpLeft, lonUpLeft, latBtmRight, lonBtmRight), 
+						INFO_CF, GRIDPOI_COL, Bytes.toBytes(gridId)));
+				put(generateRowKey(latUpLeft, lonUpLeft, latBtmRight, lonBtmRight), null, keyValues);
+				
+				
+				
+			}
+			reader.close();
+		}
+		catch(Exception e){
+			e.printStackTrace();
+		}
+		
+	}
+	*/
+	
+	public static void main(String[] args) throws IOException{
+		GridPoiTable gridTable = new GridPoiTable();
+		File file = new File("resource/txt/grid_xy.txt");
+		//gridTable.importFormFile(file);
+		
+		gridTable.findGridId(39.958782, 116.357793);
+	}
+	
+	
+}

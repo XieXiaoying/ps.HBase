@@ -1,0 +1,147 @@
+package kmeans;
+
+import java.io.InputStreamReader;
+import java.io.Reader;
+import java.util.Vector;
+
+import javax.script.Invocable;
+import javax.script.ScriptEngine;
+import javax.script.ScriptEngineManager;
+import javax.script.ScriptException;
+
+//test for svn
+public class Point {
+	
+		private double pixelX;
+		private double pixelY;
+		private double lon;
+		private double lat;
+		private String poiString;
+		private int len;
+		private int cid;    //所归属的k值
+		
+		public Point(double pixelX, double pixelY){
+			this.pixelX = pixelX;
+			this.pixelY = pixelY;
+		}
+		
+		public Point(double pixelX, double pixelY, double lon, double lat,String poiString){
+			this.pixelX = pixelX;
+			this.pixelY = pixelY;
+			this.lat = lat;
+			this.lon = lon;
+			this.poiString = poiString;
+		}
+		public Point(double pixelX, double pixelY,double lon, double lat,String poiString, int k){
+			this.pixelX = pixelX;
+			this.pixelY = pixelY;
+			this.lat = lat;
+			this.lon = lon;
+			this.poiString = poiString;
+			this.cid = k;
+		}
+		public double getPixelX(){
+			return this.pixelX;
+		}
+		
+		public double getPixelY(){
+			return this.pixelY;
+		}
+		
+		public double getLon(){
+			return this.lon;
+		}
+		
+		public double getlat(){
+			return this.lat;
+		}
+		
+		public String getPoiString(){
+			return this.poiString;
+		}
+		public double[] getBlockxy(){
+			double[] blockxy = new double[2];
+			blockxy[0] = Math.abs(pixelX/256);
+			blockxy[1] = Math.abs(pixelY/256);
+			return blockxy;
+		}
+		
+		public double[] getVector(){
+			double[] vector = new double[4];
+			vector[0] = this.getPixelX();
+			vector[1] = this.getPixelY();
+			vector[2] = this.getLon();
+			vector[3] = this.getlat();
+			
+			return vector;
+		}
+		
+		
+		public void setCid(int index){
+			this.cid = index;
+		}
+		
+		
+		public int getCid(){
+			return this.cid;
+		}
+		
+		public double getDistance(double x, double y){
+			double double_x = Math.abs(this.pixelX - x);
+			double double_y = Math.abs(this.pixelY - y);
+			return Math.sqrt(double_x * double_x + double_y * double_y);
+		}
+		
+		public String toString(){
+			String result = this.pixelX + "/" + this.pixelY + "/" + this.lon + "/" +
+					this.lat + "/" +this.poiString;
+			return result;
+			
+		}
+	/*	
+		public static double lonToPixel(double lng, int zoom){
+			return (lng + 180) * (256 * 2^zoom) / 360;
+		}
+		
+		public static double pixelToLng(double pixelX, int zoom){
+			return pixelX * 360 / (256 * 2^zoom) - 180;
+		}
+		
+		public void testForJs(){
+			ScriptEngineManager manager = new ScriptEngineManager();
+			
+			ScriptEngine engine = manager.getEngineByName("javascript");
+			Reader scriptReader = new InputStreamReader(
+					Point.class.getResourceAsStream("apiv1.3.min.js"));
+			if(engine != null){
+				try{
+					engine.eval(scriptReader);
+					if(engine instanceof Invocable){
+						Invocable invocable = (Invocable) engine;
+						//Object result = invocable.invokeFunction("add", 1, 2);
+						Object result = invocable.invokeFunction("Map.point", 110.25465465,39.4546466);
+						System.out.println(result);
+					}
+				}
+			
+			catch (Exception e) {
+				// TODO: handle exception
+				e.printStackTrace();
+			}
+			}
+			else{
+				System.out.println("script is error!!");
+			}
+			
+		}
+		*/
+		
+		
+		
+		
+		public static void main(String[] args){
+			Point point = new Point(110.2343545, 39.7899887);
+			//point.testForJs();
+		}
+
+}

@@ -1,0 +1,382 @@
+package kmeans;
+
+import java.util.ArrayList;
+import java.util.Date;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Random;
+import java.util.Vector;
+
+import javax.xml.crypto.Data;
+
+import org.apache.hadoop.hbase.KeyValue;
+import org.apache.hadoop.hbase.client.Result;
+import org.apache.hadoop.hbase.client.ResultScanner;
+import org.apache.hadoop.hbase.util.Bytes;
+
+/**
+ * 
+ * @author ytt
+ * 2015-04-23
+ * 基于网格的kmeans算法
+ * 
+ * 
+ * */
+
+public class KmeansTest {
+	
+	int k;   //指定划分的簇数
+	double mu;  //迭代的终止条件,当各个新质心相对于老质心偏移量小于mu时终止迭代
+	double[][] center;  //上一次各个簇质心的位置
+	int repeat; //重复运行的次数
+	private KmeansTable kms;
+	
+	public KmeansTest( double mu, int repeat){
+		this.k = 0;
+		this.mu = mu;
+		this.repeat = repeat;
+		this.kms = new KmeansTable();
+	
+		
+	}
+	
+    //计算两个点之间的距离
+	public double getdoubleDistans(double[] center1 , double[] center2){
+		double double_x = Math.abs(center1[0] - center2[0]);
+		double double_y = Math.abs(center1[1] - center2[1]);
+		return Math.sqrt(double_x * double_x + double_y * double_y);
+	}
+	
+	
+	
+	
+	/***
+	 * 
+	 * 以网格为初始的质心
+	 * 
+	 * */
+	public void initCenter(int zoom){
+		ResultScanner resultScanner = kms.getResource(zoom);
+		Iterator<Result> iterator = resultScanner.iterator();
+		
+		List<double[]> sumlist = new ArrayList<double[]>();
+   		
+		//进入到簇的范畴
+		while(iterator.hasNext()){
+			this.k ++;
+			
+			
+			//count代表每簇的点的个数
+			int count = 0;
+			//sumindex中存在的是[所有点的pixelX的和，所有点的pixelY的和，所有点的个数]
+			double[] sumindex = new double[3];
+	
+			Result result = iterator.next();
+			
+			
+			//进入到每个簇下的每个点的范畴
+			for(KeyValue kvs : result.list()){
+				count++;
+				String[] keyString = kvs.getKeyString().split(",");
+				for(int j = 0; j < keyString.length; j++){
+					String[] poitStrings = keyString[j].split("/");
+					sumindex[0] += Double.valueOf(poitStrings[0]);
+					sumindex[1] += Double.valueOf(poitStrings[1]);
+					
+				}
+				
+			}
+			//将每个簇内的点的个数保存下来
+			sumindex[3] = count;
+			
+			sumlist.add(sumindex);
+			
+			
+		}
+		
+		center = new double[k][];
+		for(int i = 0; i < k; i++){
+			center[i] = new double[2];
+		}
+		for(int i = 0; i < k; i++){
+			center[i][0] = sumlist.get(i)[0] / sumlist.get(i)[3];
+			center[i][1] = sumlist.get(i)[1] / sumlist.get(i)[3];
+			
+			System.out.println(center[i][0]+center[i][1]);
+		}
+		
+		
+		
+	}
+	
+	
+	
+	
+	
+	
+	
+	/*//初始化k个质心，每个质心是一个len维的向量，每维均在left-right之间
+	public void initCenter(int len, ArrayList<Point> objects){
+		Random random = new Random(System.currentTimeMillis());
+		int[] count = new int[k]; //记录每个簇有多少个元素
+		Iterator<Point> iterator = objects.iterator();
+		while(iterator.hasNext()){
+			Point object = iterator.next();
+			int id = random.nextInt(10000)%k;
+			count[id]++;
+			for(int i = 0; i < len ; i++){
+				center[id][i] += object.getVector()[i];
+				
+			}
+		}
+		for(int i = 0; i < k; i++){
+			
+			for(int j = 0; j < len; j++){
+				center[i][j] /= count[i];
+			}
+		}
+	}*/
+	
+	
+		
+		//把数据集中的每一个点归到离他最近的那个质心
+		public void classify(ArrayList<Point> objects){
+			Iterator<Point> iterator2 = objects.iterator();
+			while(iterator2.hasNext()){
+				Point object = iterator2.next();
+				double[] vector = object.getVector();
+				int len = vector.length;
+				int index = 0;
+				double neardist = Double.MAX_VALUE;
+				for(int i = 0; i < k; i++){
+					double dist = object.getDistance(center[i][0], center[i][1]);
+					if(dist < neardist){
+						neardist = dist;
+						 index = i;
+					}
+				}
+				object.setCid(index);
+			}
+		}
+		
+	
+	
+	
+	
+	//重新计算每个簇的质心，并判断终止条件是否满足，如果不满足更新个簇的的质心，如果满足就返回true
+	public boolean calNewCenter(ArrayList<Point> objects){
+		boolean end = true;
+		 int[] count = new int[k];
+		 double[][] sum = new double[k][];
+		 for(int i = 0; i < k; i++){
+			 sum[i] = new double[2];
+		 }
+		 Iterator<Point> iterator = objects.iterator();
+		 while(iterator.hasNext()){
+			 Point object = iterator.next();
+			 int id = object.getCid();
+			 count[id]++;
+			 for(int i = 0; i < 2; i++){
+				 sum[id][i] += object.getVector()[i];
+			 }
+		 }
+		 for(int i = 0; i < k; i++){
+			 if(count[i] != 0){
+				 for(int j = 0; j < 2; j++){
+					 sum[i][j] /= count[i];
+				 }
+			 }
+			else{
+				int a = (i+1)%k;
+				int b = (i+3)%k;
+				int c = (i+5)%k;
+				for(int j = 0; j < 2; j++){
+					center[i][j] = (center[a][j] + center[b][j] + center[c][j])/3;
+						 
+				}
+			}
+		}
+		for(int i = 0; i < k; i++){
+			if(getdoubleDistans(center[i], sum[i]) >= mu){
+				end = false;
+				break;
+			}
+		}
+			 
+		if(!end){
+			for(int i = 0; i < k; i++){
+				for(int j = 0; j < 2; j++){
+					center[i][j] = sum[i][j];
+				 }
+			}
+		}
+		
+		return end;
+			 
+		 
+	}
+	
+	
+	
+	//计算各簇内数据和方差的加权平均值，得出本次聚类的满意度
+	
+	/*public double getSati(ArrayList<Point> objects, int len){
+		double satisfy = 0.0;
+		int[] count = new int[k];
+		double[] ss = new double[k];
+		Iterator<Point> iterator = objects.iterator();
+		while(iterator.hasNext()){
+			Point object = iterator.next();
+			int id = object.getCid();
+			count[id]++;
+			for(int i = 0; i < len; i++){
+				ss[id] += Math.pow(object.getVector()[i] - center[id][i], 2.0);
+			}
+			
+		}
+		for(int i = 0; i < k; i++){
+			satisfy += count[i] * ss[i];
+		}
+		return satisfy;
+	}
+	*/
+	
+	
+	/**
+	 * @author ytt
+	 * 聚合并且导入到数据库中
+	 * 作为其他的工具
+	 * 
+	 * */
+	public boolean clusterAndImport(DataSource datasource, int zoom){
+		//System.out.println("第" + round + "次运行");
+		initCenter(zoom);
+		classify(datasource.getObjects());
+		while(!calNewCenter(datasource.getObjects())){
+			classify(datasource.getObjects());
+		}
+		
+		//得到聚合的结果
+		ArrayList<ArrayList<Point>> clusterResult = datasource.getResult(
+				datasource.getObjects(), k);
+		
+		//聚合后的质心们
+		List<Point> centerList = new ArrayList<Point>();
+		for(int i = 0; i < k; i++ ){
+			centerList.add(new Point(center[i][0], center[i][1]));
+		}
+		
+		//将聚合结果导入到Hbase,block代表对应的图块坐标的值
+		for(int i = 0; i < k; i++){
+			double[] block = new double[2];
+			block = centerList.get(i).getBlockxy();
+			
+			System.out.println("cluster and import ");
+			if(!kms.setCluster(zoom, block[0], block[1], 
+					clusterResult.get(i).toString(), centerList.get(i).toString(),null)){
+				
+				System.out.println("第" + i + "簇聚合结果存入数据库时失败！！！");
+				return false;
+			}
+			
+			
+			
+		}
+		
+		
+		return true;
+	
+		
+		/*double ss = getSati(datasource.getObjects(), len);
+		System.out.println("加权方差" + ss);
+		return ss;*/
+		
+	}
+	
+	/**
+	 * 从数据库中取出所有的级别下数据并聚合,导入到数据库
+	 * 
+	 * 
+	 * */
+	public boolean clusterAll(){
+		for(int i = 1; i < 19;i++){
+			ArrayList<Point> pList = new ArrayList<Point>();
+			ResultScanner result = kms.getResource(i);
+			Iterator<Result> iterator = result.iterator();
+			while(iterator.hasNext()){
+				Result rs = iterator.next();
+				for(KeyValue kvs : rs.list()){
+					String[] keyString = kvs.getKeyString().split(",");
+					for(int j = 0; j < keyString.length; j++){
+						String[] pointStrings = keyString[j].split("/");
+						
+						pList.add(new Point(Double.valueOf(pointStrings[0]), Double.valueOf(pointStrings[1]),
+								Double.valueOf(pointStrings[2]), Double.valueOf(pointStrings[3]), pointStrings[4]));
+					}
+				}
+			}
+			
+			DataSource dataSource = new DataSource(pList);
+			if(!clusterAndImport(dataSource,i)){
+				System.out.println("在zoom为： " + i + "时，聚合结果失败！");
+			}
+		}
+		
+		return true;
+		
+		
+	}
+	
+	/**
+	 * @author ytt
+	 * 
+	 * 对某一个集合下的所有的点 取出、聚合、导入到数据库
+	 * 
+	 * */
+	public boolean cluster(int zoom){
+			
+			ArrayList<Point> pList = new ArrayList<Point>();
+			ResultScanner result = kms.getResource(zoom);
+			Iterator<Result> iterator = result.iterator();
+			while(iterator.hasNext()){
+				Result rs = iterator.next();
+				for(KeyValue kvs : rs.list()){
+					String keyStrings = Bytes.toString(kvs.getValue());
+					String[] keyString = keyStrings.split(",");
+					for(int j = 0; j < keyString.length; j++){
+						String[] pointStrings = keyString[j].split("/");
+						
+						pList.add(new Point(Double.valueOf(pointStrings[0]), Double.valueOf(pointStrings[1]),
+								Double.valueOf(pointStrings[2]), Double.valueOf(pointStrings[3]), pointStrings[4]));
+					}
+				}
+			}
+			
+			DataSource dataSource = new DataSource(pList);
+			
+			if(!clusterAndImport(dataSource,zoom)){
+				System.out.println("在zoom为： " + zoom + "时，聚合结果失败！");
+			}
+		
+		
+		return true;
+		
+		
+	}
+	
+	
+	public static void main(String[] args){
+		//随机存储一些点
+		
+		KmeansTable kmeansTable = new KmeansTable();
+		//kms.setCluster(1, titleX, titleY, cluster, center, timestamp)
+		Date before = new Date();
+		System.out.println(before.toString());
+		KmeansTest km = new KmeansTest(1E-10, 7);
+		km.cluster(3);
+		//km.clusterAndImport(datasource, 3);
+		Date laterDate = new Date();
+		System.out.println(laterDate.toString());
+	}
+	
+}

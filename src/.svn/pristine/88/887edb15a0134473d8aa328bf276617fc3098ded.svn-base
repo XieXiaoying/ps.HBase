@@ -1,0 +1,437 @@
+package kmeans;
+
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Date;
+
+
+
+import java.util.Iterator;
+import java.util.List;
+
+import net.sf.json.JSONObject;
+
+import org.apache.commons.io.filefilter.PrefixFileFilter;
+import org.apache.hadoop.hbase.HColumnDescriptor;
+import org.apache.hadoop.hbase.HTableDescriptor;
+import org.apache.hadoop.hbase.KeyValue;
+import org.apache.hadoop.hbase.client.Get;
+import org.apache.hadoop.hbase.client.HBaseAdmin;
+import org.apache.hadoop.hbase.client.HTable;
+import org.apache.hadoop.hbase.client.Result;
+import org.apache.hadoop.hbase.client.ResultScanner;
+import org.apache.hadoop.hbase.client.Scan;
+import org.apache.hadoop.hbase.filter.BinaryPrefixComparator;
+import org.apache.hadoop.hbase.filter.CompareFilter.CompareOp;
+import org.apache.hadoop.hbase.filter.Filter;
+import org.apache.hadoop.hbase.filter.FilterList;
+import org.apache.hadoop.hbase.filter.PrefixFilter;
+import org.apache.hadoop.hbase.filter.RowFilter;
+import org.apache.hadoop.hbase.filter.SingleColumnValueFilter;
+import org.apache.hadoop.hbase.filter.SubstringComparator;
+import org.apache.hadoop.hbase.thrift.generated.Hbase.increment_args;
+import org.apache.hadoop.hbase.util.Bytes;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+import org.jruby.org.objectweb.asm.tree.IntInsnNode;
+
+import Common.AbstractTable;
+import Common.Column;
+import collection.Constants;
+
+public class KmeansTable extends AbstractTable{
+	private static final String tableName = "kmeans";
+	
+	public static final byte[] INFO_CF = "info".getBytes();
+	
+	public static final byte[] POIS_COL = "pois".getBytes();
+	
+	
+	public static final byte[] CLUSTER_CF = "cluster".getBytes();
+	
+	public static final byte[] CENTER_COL = "center".getBytes();
+	
+	public static final byte[] INCLUDE_COL = "include".getBytes();
+	
+	public KmeansTable(){
+		try{
+			HBaseAdmin hAdmin = new HBaseAdmin(Constants.conf);
+			if(hAdmin.tableExists(tableName)){
+				//do nothing
+			}
+			else{
+				HColumnDescriptor des = new HColumnDescriptor(INFO_CF);
+				des.setMaxVersions(Integer.MAX_VALUE);
+				HColumnDescriptor des2 = new HColumnDescriptor(CLUSTER_CF);
+				HTableDescriptor t = new HTableDescriptor(tableName);
+				
+				t.addFamily(des);
+				t.addFamily(des2);
+				hAdmin.createTable(t);
+				
+			}
+			hAdmin.close();
+			
+			hTable = new HTable(Constants.conf, tableName);
+		
+		}catch(Exception e){
+			e.printStackTrace();
+		}
+	}
+	
+	
+	
+	public static byte[] generateRowKey(int zoom, double titleX, double titleY){
+		String RowKey = zoom + Constants.SEPARATER + titleX + 
+				 Constants.SEPARATER + titleY;
+		return Bytes.toBytes(RowKey);
+	}
+	
+	/**
+	 * @author ytt
+	 * 将不同zoom下聚合后的结果存到数据库
+	 * 
+	 * */
+	public Boolean setCluster(int zoom, double titleX, double titleY, String cluster, String center , Date timestamp){
+		byte[] rowKey = generateRowKey(zoom, titleX, titleY);
+		List<KeyValue> kvs = new ArrayList<KeyValue>();
+		kvs.add(new KeyValue(rowKey, CLUSTER_CF, CENTER_COL, Bytes.toBytes(center)));
+		kvs.add(new KeyValue(rowKey, CLUSTER_CF, INCLUDE_COL, Bytes.toBytes(cluster)));
+		//System.out.println("setcluster is here");
+		return this.put(rowKey, timestamp, kvs);
+	}
+	
+	
+	/**
+	 * @author ytt
+	 * @time 2015/5/1
+	 * 根据zoom得到所有的Center
+	 * @param  int zoom
+	 * @return list<JSONObject> 返回zoom缩放比例下k个簇的k个质心
+	 * */
+	public List<JSONObject> getCenters(int zoom){
+		List<JSONObject> centers = new ArrayList<JSONObject>();
+		double pixelX;
+		double pixelY;
+		
+		Scan scan = new Scan();
+		Filter filter = new PrefixFilter(Bytes.toBytes(zoom + Constants.SEPARATER));
+		//scan.setFilter(filter);
+		FilterList filterList = new FilterList();
+		filterList.addFilter(filter);
+		List<Column> colList = new ArrayList<Column>();
+		colList.add(new Column(CLUSTER_CF, CENTER_COL));
+		List<byte[]> famList = new ArrayList<byte[]>(); 
+		famList.add(CLUSTER_CF);
+
+		/*System.out.println(Bytes.toBytes(3 + Constants.SEPARATER));
+		System.out.println(generateRowKey(3, 1.0, 1.0));
+		System.out.println("%%%%" + (zoom+Constants.SEPARATER).getBytes());*/
+		
+		
+		ResultScanner rScanner = this.scan(scan, famList, colList,filterList);
+		
+		if(rScanner == null){  //result bu wei kong
+			System.out.println("rscanner is null");
+		} 
+		
+		for(Result result : rScanner){
+			for(KeyValue keyValue : result.list()){
+				JSONObject center = new JSONObject();
+				String[] centerstring = Bytes.toString(keyValue.getValue()).split(Constants.SEPARATER);
+				pixelX = Double.valueOf(centerstring[0]);
+				pixelY = Double.valueOf(centerstring[1]);
+				
+				center.accumulate("centerx", pixelX);
+				center.accumulate("centery", pixelY);
+				centers.add(center);
+			}
+			
+		}
+		return centers;
+		
+	}
+	
+	/**
+	 * @author ytt
+	 * 2015/5/2
+	 * 在某个区域之内的某个缩放级别下的center的值
+	 * @param zoom int
+	 * @param minX double
+	 * @parem minY double
+	 * @param maxX double
+	 * @param maxY double
+	 * @return list<JSONObject> 即是[centerx:###,centery:###],[][][][][]]
+	 * 
+	 * */
+	public List<JSONObject> getCenters(int zoom, double minX, double minY, double maxX, double maxY){
+		List<JSONObject> centers = new ArrayList<JSONObject>();
+		double pixelX;
+		double pixelY;
+		Scan scan = new Scan();
+		Filter filter = new PrefixFilter(Bytes.toBytes(zoom + Constants.SEPARATER));
+		//scan.setFilter(filter);
+		FilterList filterList = new FilterList();
+		filterList.addFilter(filter);
+		List<Column> colList = new ArrayList<Column>();
+		colList.add(new Column(CLUSTER_CF, CENTER_COL));
+		List<byte[]> famList = new ArrayList<byte[]>(); 
+		famList.add(CLUSTER_CF);
+
+		/*System.out.println(Bytes.toBytes(3 + Constants.SEPARATER));
+		System.out.println(generateRowKey(3, 1.0, 1.0));
+		System.out.println("%%%%" + (zoom+Constants.SEPARATER).getBytes());*/
+		
+		
+		ResultScanner rScanner = this.scan(scan, famList, colList,filterList);
+		
+		if(rScanner == null){  //result bu wei kong
+			System.out.println("rscanner is null");
+		} 
+		
+		for(Result result : rScanner){
+			for(KeyValue keyValue : result.list()){
+
+				JSONObject center = new JSONObject();
+				String[] centerstring = Bytes.toString(keyValue.getValue()).split(Constants.SEPARATER);
+				pixelX = Double.valueOf(centerstring[0]);
+				pixelY = Double.valueOf(centerstring[1]);
+				
+				if(pixelX >= minX && pixelX <= maxX && pixelY >= minY && pixelY <= maxY){
+					center.accumulate("centerx", pixelX);
+					center.accumulate("centery", pixelY);
+					centers.add(center);
+				}
+				
+				
+			}
+			
+		}
+		return centers;
+		
+	}
+	
+	/**
+	 * @author ytt
+	 * @time 5/1
+	 * 根据zoom和center得到该缩放比例下的center簇对应的poi点
+	 * @param zoom {@link Integer}缩放比例
+	 * @param center {@link Point}
+	 * @return list<String> 返回的是String类型的poi的列表
+	 * */
+	public List<String> getPoisInCenterZoom(int zoom, Point center){
+		List<String> poisList = new ArrayList<String>();
+		byte[] rowKey = null;
+		Scan scan = new Scan();
+		Filter preFilter = new PrefixFilter(Bytes.toBytes(zoom + Constants.SEPARATER));
+		SingleColumnValueFilter singleColumnValueFilter = new SingleColumnValueFilter(
+				CLUSTER_CF, CENTER_COL, CompareOp.EQUAL, Bytes.toBytes(center.toString()));
+		FilterList filterList = new FilterList();
+		filterList.addFilter(preFilter);
+		filterList.addFilter(singleColumnValueFilter);
+		
+		List<Column> columnList = new ArrayList<Column>();
+		columnList.add(new Column(CLUSTER_CF, CENTER_COL));
+		
+		ResultScanner resultScanner = this.scan(scan, null, columnList, filterList);
+		
+		for(Result result : resultScanner){
+			for(KeyValue kValue : result.list()){
+				rowKey = kValue.getRow();
+				System.out.println(Bytes.toString(rowKey));
+			}
+		}
+		
+		columnList.clear();
+		columnList.add(new Column(CLUSTER_CF, INCLUDE_COL));
+		try {
+			Result pointsResult = this.get(rowKey, null, columnList, 1);
+			for(KeyValue kv : pointsResult.list()){
+				String valueString = Bytes.toString(kv.getValue());
+				String[] pointStrings = valueString.substring(1, valueString.length()- 1).
+						split(",");
+				for(int i = 0; i < pointStrings.length; i++){
+					String[] pointString = pointStrings[i].split(Constants.SEPARATER);
+					poisList.add(pointString[4]);
+				} 
+			}
+			
+		} catch (IOException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}
+		
+		return poisList;
+		
+	}
+	
+	
+	//新增数据
+	public boolean setPonit(int zoom, double titleX, double titleY, String pointxy,Date timestamp){
+		byte[] rowKey = generateRowKey(zoom, titleX, titleY);
+		List<String> keyList = new ArrayList<String>();
+		List<Column> columns = new ArrayList<Column>();
+		columns.add(new Column(INFO_CF, POIS_COL));
+		Get get = new Get(rowKey);
+		
+		try {
+			if(this.rowExists(get)){
+				Result rs = this.get(rowKey, null, null, columns, true);
+				String keyvalue = Bytes.toString(rs.getValue(INFO_CF, POIS_COL));
+				System.out.println("$$$$$$$$$keyvalur isisiiisisiisiis*****"+keyvalue);
+					
+				String keyString = keyvalue.substring(1, keyvalue.length()-1);
+				keyList.add(keyString);
+				
+			}
+		} catch (Exception e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}
+		
+		
+		keyList.add(pointxy);
+		List<KeyValue> keyValues = new ArrayList<KeyValue>();
+		System.out.println(keyList.toString() +"***********8********8keyList");
+		keyValues.add(new KeyValue(rowKey, INFO_CF, POIS_COL, Bytes.toBytes(keyList.toString())));
+		return this.put(rowKey, timestamp, keyValues);
+	}
+	
+	
+	
+	
+	
+	//得到某一个zoom下所有的点集合
+	public ResultScanner getResource(int zoom){
+		 
+		Scan scan = new Scan();
+		Filter filter = new PrefixFilter(Bytes.toBytes(zoom + Constants.SEPARATER));
+		//scan.setFilter(filter);
+		FilterList filterList = new FilterList();
+		filterList.addFilter(filter);
+		List<Column> colList = new ArrayList<Column>();
+		colList.add(new Column(INFO_CF, POIS_COL));
+		List<byte[]> famList = new ArrayList<byte[]>(); 
+		famList.add(INFO_CF);
+
+		/*System.out.println(Bytes.toBytes(3 + Constants.SEPARATER));
+		System.out.println(generateRowKey(3, 1.0, 1.0));
+		System.out.println("%%%%" + (zoom+Constants.SEPARATER).getBytes());*/
+		
+		
+		ResultScanner rScanner = this.scan(scan, famList, colList,filterList);
+		
+		if(rScanner == null){  //result bu wei kong
+			System.out.println("rscanner is null");
+		} 
+		
+		/////记住不能close！！！
+		/*try{ 
+			rScanner.close();
+		}catch(Exception e){
+			e.printStackTrace();
+		}*/
+		return rScanner;
+		
+		
+	}
+	
+	
+	
+	public Result getResourceone(int zoom, double titleX,double titleY){
+		
+		Result result = null;
+		List<Column> colList = new ArrayList<Column>();
+		colList.add(new Column(INFO_CF, POIS_COL));
+		try {
+			result =  this.get(generateRowKey(zoom, titleX, titleY), null, colList, 2);
+		} catch (IOException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}
+		return result;
+	}
+	
+	
+	public static void main(String[] args){
+		
+		KmeansTable kms = new KmeansTable();
+		/*
+		 * 测试sePoint i是success
+		 * 
+		 * //kms.setPonit(2, 0.0, 0.0, "testtttt", null);
+		kms.setPonit(2, 0.0, 0.0, "testMMMMM", null);
+		Date timeDate = new Date(2013, 10, 1);
+		kms.setPonit(2, 0.0, 0.0, "testtttt1", timeDate);
+		kms.setPonit(2, 0.0, 0.0, "testttt2", timeDate);
+		*/
+		/*Result rone = kms.getResourceone(3, 1.0,0.0);
+		for(KeyValue kValue : rone.list()){
+			System.out.println("jofjs");
+			String keyStrings = Bytes.toString(kValue.getValue());
+			System.out.println(keyStrings);
+		}*/
+		
+		
+		
+		/*@ ytt
+		 * 测试getsource函数
+		ResultScanner rScanner = kms.getResource(14);
+		
+		for(Result result : rScanner){/////######？？？为什么这句不管用,因为scanner关闭了！！
+			System.out.println(result.getRow().toString());
+			for(KeyValue kValue : result.list()){
+				String keyStrings = Bytes.toString(kValue.getValue());
+				System.out.println(keyStrings);
+			}
+			String keyStrings = Bytes.toString(result.getRow());
+			
+		}
+		*/
+		
+		
+		
+		/*
+		 * @time 5/1
+		 * ytt
+		 * 测试 getCenters(int zoom) 和 getPoisInCenterZoom
+		 * 成功
+		 * */
+		/*List<Point> centers = kms.getCenters(5);
+		System.out.println("*******************yi xia shi fan hui de centers***********");
+		for(Point point : centers){
+			System.out.println(point.toString());
+		}
+		
+		Point center = new Point(1581.6,589.6);
+		List<String> poiStrings = kms.getPoisInCenterZoom(5, center);
+		System.out.println("********************yi xia shi pois de xin xi*************");
+		for(String poi : poiStrings){
+			System.out.println(poi);
+		}*/
+			
+		
+		List<JSONObject> centers = kms.getCenters(12,0,0,2000000,20000000);
+		System.out.println("*******************yi xia shi fan hui de centers***********");
+		
+		for(int i = 0; i < centers.size(); i++){
+			System.out.println(centers.get(i).getDouble("centerx") + "  " + centers.get(i).getDouble("centery"));
+		}
+		
+		
+	}
+}

@@ -1,0 +1,104 @@
+package Web;
+
+import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.List;
+
+import net.sf.json.JSONObject;
+
+
+/**
+ * @author ytt
+ * 坐标的转换
+ * 
+ * 
+ * */
+public class convertXY {
+	public static double[] convertBase(double lon,double lat, int from, int to){
+		double[] convered = new double[2];
+		String path =  "http://api.map.baidu.com/geoconv/v1/?coords=" + lon + "," +
+					lat + "&from=" + from + "&to=" + to + "&ak=OtN1RDWlrzUaj69pcAIvfujI";
+		try{
+			URL url = new URL(path);
+			HttpURLConnection conn = (HttpURLConnection)url.openConnection();
+			conn.setRequestMethod("GET");
+			conn.setConnectTimeout(5*1000);
+			InputStream instream = conn.getInputStream();
+			
+			
+			ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
+			byte[] buffer = new byte[1024];
+			int len = 0;
+			while((len = instream.read(buffer)) != -1){
+				outputStream.write(buffer, 0, len);
+				
+			}
+			
+			JSONObject result = JSONObject.fromObject(outputStream.toString());
+			List<JSONObject> corred = new ArrayList<JSONObject>();
+			if(result.getInt("status") == 0){
+				corred.addAll((Collection<JSONObject>) result.get("result"));
+				convered[0] = corred.get(0).getDouble("x");
+				convered[1] = corred.get(0).getDouble("y");
+				
+						
+			}
+			else{
+				System.out.println("eeror" + result.getInt("status"));
+				return null;
+			}
+		}catch (Exception e) {
+			e.printStackTrace();
+			// TODO: handle exception
+		}
+		System.out.println(convered[0] + "   " + convered[1]);
+		return convered;
+	}
+	
+	
+	//gps转换成百度坐标
+	public static double[] gpsTobaiducor(double lon, double lat){
+		return convertBase(lon, lat, 1, 5);
+	}
+	//百度坐标转换成平面坐标
+	public static double[] gpstoworldcor(double lon, double lat){
+		return convertBase(lon, lat, 1, 6);
+	}
+	
+	//平面坐标转化成像素坐标
+	public static double[] worldtopixel(double worldx, double worldy, int zoom){
+		double[] pixelcor = new double[2];
+		pixelcor[0] = Math.floor(worldx * Math.pow(2, zoom - 18));
+		pixelcor[1] = Math.floor(worldy * Math.pow(2, zoom - 18));
+		
+		System.out.println(pixelcor[0] + "   " + pixelcor[1]);
+		return pixelcor;
+	}
+	
+	//像素坐标转换成图块坐标
+	public static double[] pixeltotitle(double pixelcorx, double pixelcory){
+		double[] titlecor = new double[2];
+		titlecor[0] = Math.floor(pixelcorx/256);
+		titlecor[1] = Math.floor(pixelcory/256);
+		System.out.println(titlecor[0] + "  " + titlecor[1]);
+		return titlecor;
+	}
+	
+	
+	
+	public static void  main(String[] args){
+		//convertBase(114.21892734521, 29.575429778924,1, 5);
+		//worldtopixel(12961630.95, 4817603.74, 11);
+		//pixeltotitle(101262, 37637);
+		double[] baidu = gpsTobaiducor(116.460186,39.984569);
+		ComputePOI.computePOI(baidu[0], baidu[1]);
+		ComputePOI.computePOI(baidu[0], baidu[1]);
+		ComputePOI.computePOI(baidu[0], baidu[1]);
+		ComputePOI.computePOI(baidu[0], baidu[1]);
+	}
+	
+}

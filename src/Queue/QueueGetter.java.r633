@@ -1,0 +1,215 @@
+package Queue;
+
+import java.util.Date;
+import java.util.List;
+
+import net.sf.json.JSONObject;
+
+import org.apache.hadoop.hbase.util.Bytes;
+import org.apache.log4j.Logger;
+
+
+
+import collection.CollectionPicTable;
+import collection.CollectionTable;
+import collection.Constants;
+import Mysql.DBOperator;
+import Parser.JSONParser;
+import Queue.DataElem.DataType;
+import Web.GridPoiTable;
+
+/**
+ * 缓存队列"消费者"
+ * 
+ * @author leeying
+ * 
+ */
+public class QueueGetter implements Runnable {
+	// 图片压缩线程池
+	/*ExecutorService compressThreadPool = Executors.newSingleThreadExecutor(); 
+	
+	// 图片压缩线程
+	Callable<byte[]> compressThread = new Callable<byte[]>() {
+		public byte[] call() throws Exception {
+			byte[] content = null;
+			while( (content = getPic()) == null){
+				// do nothing
+			}
+			// 压缩过程差不多需要300多ms
+			return compressImageByarray.compress(content);
+		}
+	};
+	
+	// 原图
+	private byte[] originalPic = null;
+	
+	synchronized public void setPic(byte[] content){
+		originalPic = content;
+	}
+	
+	synchronized public byte[] getPic(){
+		return originalPic;
+	}*/
+	
+	public enum DBType {
+		Hbase,Mysql
+	};
+	
+	// 缓存队列
+	private SingletonDataQueue dataQueue;
+	// 感应数据收集表
+	private CollectionTable ct = null;
+	// 图片收集表
+	private CollectionPicTable cpt = null;
+	// 数据库类型，因为本项目需要对比HBase和Mysql的性能
+	private DBType dbType = null;
+	
+	private DBOperator mysqlDBOperator = null;
+
+	static Logger logger = Logger.getLogger(QueueGetter.class);
+	
+	
+	public QueueGetter(SingletonDataQueue dataQueue,DBType dbType) {
+		this.dataQueue = dataQueue;
+		this.dbType = dbType;
+		
+		if(this.dbType == DBType.Mysql){
+			mysqlDBOperator = new DBOperator();
+		}
+		else if(this.dbType == DBType.Hbase){
+			ct = new CollectionTable();
+			// 开启写缓存
+			ct.setAutoFlush(false);
+		}
+			
+		cpt = new CollectionPicTable();
+	}
+
+	@Override
+	public void run() {
+		while (true) {
+			Date before = new Date();
+			DataElem elem = dataQueue.getAndRemoveELem();
+			Date after1 = new Date();
+			if (elem != null) {
+				// 内容是JSON格式
+				if (elem.getDt() == DataType.JSON) {
+					if(dbType == DBType.Hbase){
+						ct.setJSON(elem.getContentInString());
+						Date after = new Date();
+						logger.info("Deal with JSON string in "
+								+ (after.getTime() - before.getTime())
+								+ " ms ");
+					}
+					else if(dbType == DBType.Mysql){
+						List<String> SQLCommandList = JSONParser.parseJSON2SQLs(elem.getContentInString());
+						for(String SQLCommand: SQLCommandList ){
+							System.out.println(SQLCommand);
+							mysqlDBOperator.doOperate("Test", SQLCommand);
+						}	
+						
+						Date after = new Date();
+						logger.info("Deal with JSON string in "
+								+ (after.getTime() - before.getTime())
+								+ " ms ");
+					}
+					else{
+						logger.info(dbType + "is not a valid DBType");
+					}
+					
+					
+
+				}
+				// 内容是图片格式
+				else if (elem.getDt() == DataType.PIC) {
+					
+					
+					//压缩图片
+					//Future<byte[]> future = compressThreadPool.submit(compressThread);
+					
+					// 解析图片
+					//JSONObject json = JSONObject.fromObject(EXIFParser
+					//		.parse(elem.getContent()));
+					
+					try {
+						// 图片划分
+						List<byte[]> subPics = cpt.splitPic(
+							  elem.getContent(), 1024 * 1024);
+							 
+						  
+						for(byte[] subPic : subPics){
+							// 存储图片
+							JSONObject pic = JSONObject.fromObject(
+									elem.getContentInString()).getJSONObject("pic");
+
+							if (!pic.isNullObject()) {
+								Date timestamp = new Date(
+										pic.getLong(Constants.TIMESTAMP));
+
+								// 提取压缩结果
+								/*
+								 * byte[] compressContent = null; try {
+								 * compressContent =
+								 * future.get(100,TimeUnit.MILLISECONDS); } catch
+								 * (InterruptedException | ExecutionException e) {
+								 * // TODO Auto-generated catch block
+								 * e.printStackTrace(); } catch (TimeoutException e)
+								 * { e.printStackTrace(); }
+								 */
+
+								// System.out.println(pic.toString());
+
+								cpt.setPic(pic.getDouble(Constants.LON),
+										pic.getDouble(Constants.LAT), timestamp,
+										pic.getString(Constants.USERNAME),
+										subPic, null,
+										pic.getInt(Constants.FPM), pic.getString(Constants.STATION));
+								GridPoiTable gridPoiTable = new GridPoiTable();
+								String poiIDString = gridPoiTable.regionIsExist(pic.getDouble(Constants.LAT), pic.getDouble(Constants.LON));
+								if (poiIDString!=null) {//新建站点，需要更新Web.GridPoiTable
+									gridPoiTable.setGrid(pic.getDouble(Constants.LAT), pic.getDouble(Constants.LON), timestamp, pic.getString(Constants.USERNAME));
+								}
+		
+
+							}
+							Date after = new Date();
+
+							logger.info(Bytes.toString(elem.getUri())
+									+ "\tGet and remove element" + " in"
+									+ (after1.getTime() - before.getTime())
+									+ "ms\t" + "Deal with PIC" + " in"
+									+ (after.getTime() - after1.getTime())
+									+ "ms");
+						}
+						
+					} catch (Exception e) {
+						logger.info((Bytes.toString(elem.getUri())
+								+ "\tGet and remove element Error:" + e
+								.getMessage()));
+					}
+					
+
+				} else {
+					logger.info(elem.getDt() + "is not a valid dataType");
+				}
+
+			}// end if
+
+			// 队列空,等待
+			else {
+				try {
+					if(dbType == DBType.Hbase){
+						// 最后要将writebuffer里的结果flush回去呀。。。
+						ct.flushCommit();
+					}
+					Thread.sleep(5000);
+				} catch (InterruptedException e) {
+					e.printStackTrace();
+				} 
+			}
+
+		}// end while
+
+	}
+
+}

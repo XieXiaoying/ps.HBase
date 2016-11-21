@@ -1,0 +1,508 @@
+package collection;
+
+import java.io.BufferedReader;
+import java.io.File;
+import java.io.FileNotFoundException;
+import java.io.FileReader;
+import java.io.IOException;
+import java.text.ParseException;
+import java.text.SimpleDateFormat;
+import java.util.ArrayList;
+import java.util.Date;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
+
+import net.sf.json.JSONObject;
+
+import org.apache.hadoop.hbase.KeyValue;
+import org.apache.hadoop.hbase.client.Delete;
+import org.apache.hadoop.hbase.client.HTable;
+import org.apache.hadoop.hbase.client.Result;
+import org.apache.hadoop.hbase.client.ResultScanner;
+import org.apache.hadoop.hbase.client.Scan;
+import org.apache.hadoop.hbase.filter.CompareFilter;
+import org.apache.hadoop.hbase.filter.FilterList;
+import org.apache.hadoop.hbase.filter.SingleColumnValueFilter;
+import org.apache.hadoop.hbase.util.Bytes;
+
+import Web.ComputePOI;
+import Web.GridPoiTable;
+import Common.AbstractTable;
+import Common.Column;
+
+/**
+ * 收集的图片表
+ * 
+ * @author leeying
+ * 
+ */
+public class CollectionPicTable extends AbstractTable {
+	// 表名
+	public static final String tableName = "pic";
+	// 收集数据列族
+	public static final byte[] INFO_CF = "info".getBytes();
+	// POI列族
+	public static final byte[] POI_CF = "poi".getBytes();
+	
+	public static final String[] family = {"info",  "poi"};
+
+	// 图片内容列名
+	public static final byte[] PIC_COL = "pic".getBytes();
+	// 压缩图片内容
+	public static final byte[] COMPRESS_COL = "compress".getBytes();
+	// 图片PM2.5列名
+	public static final byte[] FPM_COL = "fpm".getBytes();
+
+	public static final byte[] POI_COL = "poi".getBytes();
+
+	public CollectionPicTable() {
+		try {
+			createTable(Constants.conf, tableName, family);
+			hTable = new HTable(Constants.conf, tableName);
+			// Configuration conf = HBaseConfiguration.create();
+			// conf.setLong(HConstants.HBASE_REGIONSERVER_LEASE_PERIOD_KEY,
+			// 120000);
+			// = new HTable(conf, tableName);
+		} catch (IOException e) {
+			e.printStackTrace();
+		}
+	}
+
+	/**
+	 * 生成行键
+	 * 
+	 * @param lon
+	 * @param lat
+	 * @param timestamp
+	 * @param username
+	 * @return
+	 */
+	public static byte[] generateRowkey(double lon, double lat, Date timestamp,
+			String username) {
+		String rowkey = timestamp.getTime() + Constants.SEPARATER;
+
+		if (lon != -1 && lat != -1) {
+			rowkey += lon + Constants.SEPARATER + lat + Constants.SEPARATER;
+		}
+
+		if (username != null) {
+			rowkey += username;
+		}
+		return rowkey.getBytes();
+	}
+	
+	/**
+	 * @param rowkey 
+	 * @return UploadPicInfo
+	 * 
+	 * */
+	public UploadPicInfo retrieveInfoFromRowKey(byte[] rowKey) {
+		String str = Bytes.toString(rowKey);
+		String[] tokens = str.split(Constants.SEPARATER);
+
+		if (tokens.length < 3) {
+			System.out.println("Invalid CollectionPicTable rowkey = " + str);
+			return null;
+		}
+
+		long timestamp = Long.parseLong(tokens[0]);
+		double lon = Double.parseDouble(tokens[1]);
+		double lat = Double.parseDouble(tokens[2]);
+		String username = "unkown";
+		if (tokens.length == 4) {
+			username = tokens[3];
+		}
+
+		return new UploadPicInfo(timestamp, lon, lat, username);
+	}
+
+	/**
+	 * 保存（lon，lat）地�?timestamp时间 图片内容content和pm2.5值fpm
+	 * 
+	 * @param lon
+	 * @param lat
+	 * @param timestamp
+	 * @param username
+	 * @param content
+	 *            原图 or 图片路径
+	 * @param compressContent
+	 *            压缩图片
+	 * @param fpm
+	 *            图片PM2.5�?
+	 * @return
+	 */
+	public Boolean setPic(double lon, double lat, Date timestamp,
+			String username, byte[] content, byte[] compressContent, int fpm,String poi) {
+		byte[] rowKey = generateRowkey(lon, lat, timestamp, username);
+		//System.out.println("pic = " + Bytes.toString(content) + " lon = " + lon
+			//	+ " lat = " + lat + " username = " + username + "fpm = " + fpm);
+		//System.out.println("RowKey = " + Bytes.toString(rowKey));
+		List<KeyValue> kvs = new ArrayList<KeyValue>();
+		kvs.add(new KeyValue(rowKey, INFO_CF, PIC_COL, content));
+		kvs.add(new KeyValue(rowKey, INFO_CF, FPM_COL, Bytes.toBytes(fpm)));
+		if(poi != null){
+			kvs.add(new KeyValue(rowKey, POI_CF, POI_COL, Bytes.toBytes(poi)));
+		}
+		if (compressContent != null) {
+			kvs.add(new KeyValue(rowKey, INFO_CF, COMPRESS_COL, compressContent));
+		}
+		return this.put(rowKey, null, kvs);
+	}
+
+	/**
+	 * 获得图片,没有则返回null
+	 * 
+	 * @param lon
+	 * @param lat
+	 * @param timestamp
+	 * @return
+	 */
+	public List<byte[]> getPic(double lon, double lat, Date timestamp) {
+		// 设置查询�?
+		List<Column> columnList = new ArrayList<Column>();
+		columnList.add(new Column(INFO_CF, PIC_COL));
+
+		Scan scan = new Scan();
+		scan.setStartRow(generateRowkey(lon, lat, timestamp, null));
+		double endLat = Double.parseDouble(lat + "0");
+		scan.setStopRow(generateRowkey(lon, endLat, timestamp, null));
+
+		ResultScanner rs = this.scan(scan, null, columnList, null);
+		if (rs != null) {
+			List<byte[]> picList = new ArrayList<byte[]>();
+			for (Result r : rs) {
+				picList.add(r.getValue(INFO_CF, PIC_COL));
+			}
+
+			rs.close();
+
+			return picList;
+		}
+
+		return null;
+
+	}
+
+	/**
+	 * 获得从beginTime至今的图�?没有则返回null
+	 * 
+	 * @return
+	 */
+	public List<Pic> getPic(Date beginTime) {
+		// 设置查询�?
+		List<Column> columnList = new ArrayList<Column>();
+		columnList.add(new Column(INFO_CF, PIC_COL));
+
+		// 起始行键
+		byte[] startRowKey = generateRowkey(-1, -1, beginTime, null);
+		Scan scan = new Scan();
+		scan.setStartRow(startRowKey);
+
+		ResultScanner rs = this.scan(scan, null, columnList, null);
+		if (rs != null) {
+			List<Pic> picList = new ArrayList<Pic>();
+			for (Result r : rs) {
+				try {
+					byte[] val = null;
+					if ((val = r.getValue(INFO_CF, PIC_COL)) != null) {
+						UploadPicInfo uploadPicInfo = retrieveInfoFromRowKey(r
+								.getRow());
+						if (uploadPicInfo == null) {
+							continue;
+						}
+						Pic pic = new Pic(new Date(
+								uploadPicInfo.getUploadtime()),
+								uploadPicInfo.getLon(), uploadPicInfo.getLat(),
+								Bytes.toString(val));
+						picList.add(pic);
+
+					}
+				} catch (Exception e) {
+					e.printStackTrace();
+				}
+			}
+
+			rs.close();
+			return picList;
+
+		}
+
+		return null;
+
+	}
+
+	/**
+	 * 删除图片
+	 * 
+	 * @param rowKey
+	 * @return
+	 */
+	public Boolean delPic(byte[] rowKey) {
+		Delete del = new Delete(rowKey);
+		try {
+			hTable.delete(del);
+		} catch (IOException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+			return false;
+		}
+		return true;
+	}
+
+	
+	public static List<byte[]> splitPic(byte[] content, int sectionSize) {
+		List<byte[]> subPics = new ArrayList<byte[]>();
+		int index = 0;
+		while(index < content.length){
+			int len = Math.min(content.length - index, sectionSize);
+			byte[] subPic = new byte[len];
+			System.arraycopy(content, index, subPic, 0, len);
+			
+			subPics.add(subPic);
+			
+			index += len;
+			
+		}
+		
+		return subPics;
+
+	}
+	
+	/**
+	 * 扫描获得所有POI值，没有则返回null
+	 * 
+	 * @return
+	 */
+	public Set<String> getAllPOI() {
+		// 构造扫描所有具有POI的数据的扫描�?
+		SingleColumnValueFilter f = new SingleColumnValueFilter(POI_CF,
+				POI_COL, CompareFilter.CompareOp.NOT_EQUAL, (byte[]) null);
+		f.setFilterIfMissing(true);
+
+		List<byte[]> cfList = new ArrayList<byte[]>();
+		cfList.add(POI_CF);
+		ResultScanner rs = this.scan(null, cfList, null, new FilterList(f));
+		//System.out.println(rs.getClass());
+		if (rs != null) {
+			Set<String> results = new HashSet<String>();
+			for (Result r : rs) {
+				byte[] poi = null;
+				if (!r.isEmpty()
+						&& (poi = r.getValue(CollectionPicTable.POI_CF,
+								CollectionPicTable.POI_COL)) != null) {
+					results.add(Bytes.toString(poi));
+				}
+			}
+			rs.close();
+
+			if (results.isEmpty()) {
+				return null;
+			}
+			return results;
+		}
+
+		return null;
+	}
+
+	/**
+	 * 
+	 * 导入伪数?
+	 */
+	public void importFakeData(String basePath) {
+		File f = new File("resource/txt/newimg_info.txt");
+		try {
+			BufferedReader br = new BufferedReader(new FileReader(f));
+			String line;
+			while ((line = br.readLine()) != null) {
+				String[] tokens = line.split("\t");
+				String filename = tokens[0] + ".jpg";
+				double lat = Double.parseDouble(tokens[1]);
+				double lon = Double.parseDouble(tokens[2]);
+				String relativePath = tokens[3];
+				int fpm = Integer.parseInt(tokens[4]);
+				String poi = tokens[5];
+				String time = tokens[6] + " 00:00:00";
+
+				SimpleDateFormat sdf = new SimpleDateFormat(
+						"yyyy/MM/dd hh:mm:ss");
+				Date timestamp = sdf.parse(time);
+
+				String absolutePath = basePath.endsWith(Constants.SEPARATER) ? basePath
+						+ relativePath + filename
+						: basePath + Constants.SEPARATER + relativePath
+								+ filename;
+
+				String username = "ImportedDate";
+				// 存储图片
+				/*
+				 * setPic(lon, lat, timestamp, absolutePath.getBytes(), null,
+				 * fpm);
+				 */
+
+				byte[] rowKey = generateRowkey(lon, lat, timestamp, username);
+				List<KeyValue> kvs = new ArrayList<KeyValue>();
+				kvs.add(new KeyValue(rowKey, INFO_CF, PIC_COL, absolutePath
+						.getBytes()));
+				kvs.add(new KeyValue(rowKey, INFO_CF, FPM_COL, Bytes
+						.toBytes(fpm)));
+				kvs.add(new KeyValue(rowKey, POI_CF, POI_COL, poi.getBytes()));
+				this.put(rowKey, null, kvs);
+			}
+			br.close();
+		} catch (FileNotFoundException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		} catch (IOException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		} catch (ParseException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}
+	}
+
+	public void fun() {
+		try {
+			
+			File infoFile = new File("resource/txt/laowang.txt");
+			if (infoFile.exists()) {
+				BufferedReader reader = new BufferedReader(new FileReader(
+						infoFile));
+				String line = null;
+				while ((line = reader.readLine()) != null) {
+					String[] tokens = line.split("\t");
+					if (tokens.length == 7) {
+						String picName = tokens[3].endsWith("/")?tokens[3]
+								+ tokens[0]:tokens[3]+"/"+tokens[0];
+						if(!picName.startsWith("/")){
+							picName = "/" + picName;
+						}
+						double lat = Double.parseDouble(tokens[1]);
+						double lon = Double.parseDouble(tokens[2]);
+						int fpm = Integer.parseInt(tokens[4]);
+						String poi = tokens[5];
+						SimpleDateFormat sdf = new SimpleDateFormat(
+								"yyyy/MM/dd");
+						Date timestamp = sdf.parse(tokens[6]);
+						setPic(lon, lat, timestamp, "importer", picName.getBytes(), null, fpm,poi);
+						
+					}
+				}
+				reader.close();
+			}
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+
+	}
+	
+	public  void fun2() {
+		try {
+
+			File infoFile = new File("resource/txt/BUPT.txt");
+			if (infoFile.exists()) {
+				BufferedReader reader = new BufferedReader(new FileReader(
+						infoFile));
+				String line = null;
+				while ((line = reader.readLine()) != null) {
+					String[] tokens = line.split("\t");
+					if (tokens.length == 3) {
+						//String picName = "/usr/local/apache-tomcat-7.0.54/webapps/ROOT/"
+						//		+ tokens[0];
+						String picName = tokens[0];
+						String POI = tokens[1];
+
+						JSONObject pic = JSONObject.fromObject(tokens[2])
+								.getJSONObject("pic");
+						if (!pic.isNullObject()) {
+							Date timestamp = new Date(
+									pic.getLong(Constants.TIMESTAMP));
+
+							setPic(pic.getDouble(Constants.LON),
+									pic.getDouble(Constants.LAT), timestamp,
+									pic.getString(Constants.USERNAME),
+									picName.getBytes(), null,
+									pic.getInt(Constants.FPM), POI);
+						}
+
+					}
+				}
+				reader.close();
+			}
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+
+	}
+	
+	
+	public void fun3(String importfile) throws IOException{
+		File importFile3 = new File(importfile);
+		if(importFile3.exists()){
+			try {
+				String poi = null;
+				BufferedReader reader = new BufferedReader(new FileReader(importFile3));
+				String line = null;
+				while( (line = reader.readLine()) != null){
+					JSONObject jsonObject = JSONObject.fromObject(line);
+					
+					//ComputePOI();
+					String picName = "/home/ps/img/photos/wwd/iphone2/" + jsonObject.getString("pic");
+					double lon = jsonObject.getDouble("lon");
+					double lat = jsonObject.getDouble("lat");
+					int fpm = jsonObject.getInt("fpm");
+					Date timestamp = new Date(jsonObject.getLong("time"));
+					String userName = "wanglaoshi";
+					if(poi == null){
+						GridPoiTable gridPoiTable = new GridPoiTable();
+						if(gridPoiTable.regionIsExist(lon, lat) != null){
+							gridPoiTable.setGrid(lon, lat, timestamp, userName);
+						}
+						
+						poi = ComputePOI.computePOI(lon, lat);
+					}
+					
+					setPic(lon, lat, timestamp, userName, Bytes.toBytes(picName), null, fpm, poi);
+					
+				}
+				reader.close();
+				
+				
+			} catch (FileNotFoundException e) {
+				// TODO Auto-generated catch block
+				e.printStackTrace();
+			}
+			
+		}
+	}
+	
+	
+	
+	
+	
+	public static void main(String[] args) throws Exception{
+
+		/*
+		 * Date today = new Date(1411344653981L); today.setHours(0);
+		 * 
+		 * System.out.println("today is " + today.toGMTString() + "("
+		 * +today.getTime()+")");
+		 * 
+		 * List<Pic> picList = new CollectionPicTable().getPic(today); for(Pic
+		 * pic : picList){ System.out.println(pic); }
+		 */
+
+		//new CollectionPicTable().fun();
+		//new CollectionPicTable().fun2();;
+		/*System.out.println("fun3 is open!!!!");
+
+		new CollectionPicTable().fun3("resource/txt/getpmfromsite.txt");
+		System.out.println("fun3 is success!!!!");
+*/
+		new CollectionPicTable().getAllPOI();
+		
+		
+	}
+
+}

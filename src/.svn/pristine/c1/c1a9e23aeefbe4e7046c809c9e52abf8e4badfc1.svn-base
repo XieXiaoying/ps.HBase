@@ -1,0 +1,487 @@
+package collection;
+
+import static org.junit.Assert.fail;
+
+import java.io.BufferedReader;
+import java.io.File;
+import java.io.FileNotFoundException;
+import java.io.FileReader;
+import java.io.IOException;
+import java.text.ParseException;
+import java.text.SimpleDateFormat;
+import java.util.ArrayList;
+import java.util.Date;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
+
+import net.sf.json.JSONObject;
+
+import org.apache.hadoop.hbase.KeyValue;
+import org.apache.hadoop.hbase.client.Delete;
+import org.apache.hadoop.hbase.client.HTable;
+import org.apache.hadoop.hbase.client.Put;
+import org.apache.hadoop.hbase.client.Result;
+import org.apache.hadoop.hbase.client.ResultScanner;
+import org.apache.hadoop.hbase.client.Scan;
+import org.apache.hadoop.hbase.filter.CompareFilter;
+import org.apache.hadoop.hbase.filter.Filter;
+import org.apache.hadoop.hbase.filter.FilterList;
+import org.apache.hadoop.hbase.filter.PageFilter;
+import org.apache.hadoop.hbase.filter.SingleColumnValueExcludeFilter;
+import org.apache.hadoop.hbase.filter.SingleColumnValueFilter;
+import org.apache.hadoop.hbase.mapreduce.hadoopbackport.TotalOrderPartitioner;
+import org.apache.hadoop.hbase.util.Bytes;
+
+import junit.framework.Assert;
+import Common.AbstractTable;
+import Common.Column;
+import Fusion.FusionData;
+import Fusion.Grid;
+import Parser.JSONParser;
+import Pic.WeatherTable;
+
+/**
+ * 收集的数据表
+ * 
+ * @author leeying
+ * 
+ */
+public class CollectionTable extends AbstractTable{
+	// 表名
+	public static final String tableName = "collection";
+	// 收集数据列族
+	public static final byte[] INFO_CF = "info".getBytes();
+	// 网格列族
+	public static final byte[] GRID_CF = "grid".getBytes();
+
+	// 区域X坐标
+	public static final byte[] X_COL = "x".getBytes();
+	// 区域Y坐标
+	public static final byte[] Y_COL = "y".getBytes();
+
+	/**
+	 * 开启or关闭写缓存
+	 * @param flag
+	 */
+	public void setAutoFlush(Boolean flag){
+		if (flag == false) {
+			// 开启客户端缓存
+			hTable.setAutoFlush(false);
+			// 默认为2M
+			try {
+				hTable.setWriteBufferSize(2 * 1024 * 1024);
+			} catch (IOException e) {
+				// TODO Auto-generated catch block
+				e.printStackTrace();
+			}
+		} else {
+			hTable.setAutoFlush(true);
+		}
+	}
+	
+	public void flushCommit(){
+		try {
+			hTable.flushCommits();
+		} catch (IOException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}
+	}
+
+	public CollectionTable() {
+		try {
+			hTable = new HTable(Constants.conf, tableName);
+		} catch (IOException e) {
+			e.printStackTrace();
+		}
+
+	}
+	
+	public UploadDataInfo retrieveInfoFromKey(byte[] rowKey){		
+		String str = Bytes.toString(rowKey);
+		String[] tokens = str.split(Constants.SEPARATER);
+		
+		if(tokens.length != 2){
+			System.out.println("Invalid CollectionTable rowkey = " + str);
+			return null;
+		}
+		
+		Date timestamp = new Date(Long.parseLong(tokens[0]));	
+		String username = tokens[1];
+	
+		return new UploadDataInfo(timestamp,username);
+	}
+	
+	/**
+	 *  生成行键
+	 * @param username
+	 * @param timestamp
+	 * @return
+	 */
+	public static byte[] generateRowKey(String username, Date timestamp) {
+		if(username == null){
+			String rowKey = timestamp.getTime() + Constants.SEPARATER;
+			return rowKey.getBytes();
+		}
+		String rowKey = timestamp.getTime() + Constants.SEPARATER +  username;
+		return rowKey.getBytes();
+	}
+	
+	/**
+	 * 导入伪数据
+	 */
+	public void importFakeData(String filePath){
+		//File f = new File("resource/txt/tbl_traj_new.txt");
+		File f = new File(filePath);
+		List<Put> puts = new ArrayList<Put>();
+		try {
+			BufferedReader br = new BufferedReader(new FileReader(f));
+			String line;
+			while(( line = br.readLine()) != null){
+				String[] tokens = line.split("\t");
+				String username = tokens[1];
+				int tid = Integer.parseInt(tokens[2]);
+				double lat = Double.parseDouble(tokens[3]);
+				double lon = Double.parseDouble(tokens[4]);
+				String time = tokens[5];
+				int humi = Integer.parseInt(tokens[6]);
+				int temp = Integer.parseInt(tokens[7]);
+				int light = Integer.parseInt(tokens[8]);
+				
+				//System.out.println(username + "\t" + tid + "\t"+lon + "\t" + lat + "\t" + time + "\t" + humi + "\t" + temp + "\t" + light);
+				
+				SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd hh:mm:ss");
+				Date timestamp = sdf.parse(time);
+				
+				byte[] rowKey = CollectionTable.generateRowKey(username, timestamp);
+				Put put = new Put(rowKey);
+				put.add(CollectionTable.INFO_CF, Constants.LON.getBytes(), Bytes.toBytes(lon));
+				put.add(CollectionTable.INFO_CF, Constants.LAT.getBytes(), Bytes.toBytes(lat));
+				put.add(CollectionTable.INFO_CF, WeatherTable.HUMI, Bytes.toBytes(humi));
+				put.add(CollectionTable.INFO_CF, WeatherTable.TEMP, Bytes.toBytes(temp));
+				put.add(CollectionTable.INFO_CF, Constants.LIGHT.getBytes(), Bytes.toBytes(light));
+				put.add(CollectionTable.INFO_CF, Constants.TID.getBytes(), Bytes.toBytes(tid));
+				
+				puts.add(put);				
+				//break;
+			}
+			
+			//System.out.println("Puts num = " + puts.size());
+			//System.out.println("Set num = " + rowKeySet.size());
+			
+			//打开写缓存
+			hTable.setAutoFlush(false);
+			Assert.assertFalse(hTable.isAutoFlush());
+			//插入数据库
+			hTable.put(puts);
+			hTable.flushCommits();
+			
+			hTable.setAutoFlush(true);
+			
+			br.close();
+		} catch (FileNotFoundException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		} catch (IOException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		} catch (ParseException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}
+		
+	}
+	
+	public void setJSON(String content){
+		// 解析JSON字符串
+		List<Put> puts = JSONParser.parseJSON2Puts(content);
+		try {
+			hTable.put(puts);
+		} catch (IOException e) {
+			e.printStackTrace();
+		}
+	}
+	
+	
+	public void delete(byte[] rowKey){
+		Delete del = new Delete(rowKey);
+		try {
+			hTable.delete(del);
+		} catch (IOException e) {
+			fail();
+		}
+	}
+	
+	
+	/**
+	 * 数据收集表
+	 * 查询某个Grid的所有收集光线值，没有则返回null
+	 * @param grid
+	 * @return
+	 */
+	public List<Integer> getLightInGrid(Grid grid){
+		//System.out.println("查询"+grid+"的光线信息");
+		// 设置过滤的列
+		List<Column>columnList = new ArrayList<Column>();
+		columnList.add(new Column(CollectionTable.INFO_CF, Constants.LIGHT.getBytes()));
+		columnList.add(new Column(CollectionTable.GRID_CF, CollectionTable.X_COL));
+		columnList.add(new Column(CollectionTable.GRID_CF, CollectionTable.Y_COL));
+		
+		// 过滤器
+		int grid_x = grid.getX();
+		int grid_y = grid.getY();
+		SingleColumnValueExcludeFilter x_f = new SingleColumnValueExcludeFilter(
+				CollectionTable.GRID_CF, CollectionTable.X_COL,
+				CompareFilter.CompareOp.EQUAL, Bytes.toBytes(grid_x));
+		x_f.setFilterIfMissing(true);
+		
+		SingleColumnValueExcludeFilter y_f = new SingleColumnValueExcludeFilter(
+				CollectionTable.GRID_CF, CollectionTable.Y_COL,
+				CompareFilter.CompareOp.EQUAL, Bytes.toBytes(grid_y));
+		y_f.setFilterIfMissing(true);
+		
+		ResultScanner rs = scan(null, null, columnList, new FilterList(x_f,
+				y_f));
+		if (rs != null) {
+			List<Integer> results = new ArrayList<Integer>();
+			for (Result r : rs) {
+				byte[] val = null;
+				if ((val = r.getValue(CollectionTable.INFO_CF,
+						Constants.LIGHT.getBytes())) != null) {
+					results.add(Bytes.toInt(val));
+				}
+			}
+			rs.close();
+			
+			if(results.isEmpty()){
+				return null;
+			}
+			return results;
+		}
+
+		return null;
+
+	}
+	
+	
+	/**
+	 * 获得所有Grid,没有则返回null
+	 * @return
+	 */
+	public Set<Grid> getAllGrid(){
+		// 构造扫描所有具有Grid的数据的扫描器
+		SingleColumnValueFilter f = new SingleColumnValueFilter(
+				CollectionTable.GRID_CF,CollectionTable.X_COL ,
+				CompareFilter.CompareOp.NOT_EQUAL, (byte[]) null);
+		f.setFilterIfMissing(true);
+		// 设置扫描列族
+		List<byte[]>cfList = new ArrayList<byte[]>();
+		cfList.add(CollectionTable.GRID_CF);
+		
+		ResultScanner rs = scan(null, cfList, null, new FilterList(f));
+		if (rs != null) {
+			Set<Grid> results = new HashSet<Grid>();
+			for (Result r : rs) {
+				//System.out.println("result = " + r.getRow());
+				byte[] grid_x = r.getValue(CollectionTable.GRID_CF, CollectionTable.X_COL);
+				byte[] grid_y = r.getValue(CollectionTable.GRID_CF, CollectionTable.Y_COL);
+
+				results.add(new Grid(Bytes.toInt(grid_x), Bytes.toInt(grid_y)));
+			}
+			rs.close();
+
+			if (results.isEmpty()) {
+				return null;
+			}
+			return results;
+		}
+		return null;
+	}
+	
+	
+	public List<FusionData> getCollectedData(Date startTime, Date endTime){
+		Scan scan = new Scan();
+		scan.setStartRow(generateRowKey(null, startTime));
+		scan.setStartRow(generateRowKey(null, endTime));
+		
+		List<Column> columnList = new ArrayList<Column>();
+		columnList.add(new Column(INFO_CF,Bytes.toBytes(Constants.LON)));
+		columnList.add(new Column(INFO_CF,Bytes.toBytes(Constants.LAT)));
+		columnList.add(new Column(INFO_CF,Bytes.toBytes(Constants.LIGHT)));
+		columnList.add(new Column(INFO_CF,Bytes.toBytes(Constants.NOISE)));
+		
+		// 构造扫描所有具有LON的数据的扫描器
+		SingleColumnValueFilter lonFilter = new SingleColumnValueFilter(INFO_CF,
+				Bytes.toBytes(Constants.LON),
+				CompareFilter.CompareOp.NOT_EQUAL, (byte[]) null);
+		lonFilter.setFilterIfMissing(true);
+		
+		// 构造扫描所有具有LAT的数据的扫描器
+		SingleColumnValueFilter latFilter = new SingleColumnValueFilter(
+				INFO_CF, Bytes.toBytes(Constants.LAT),
+				CompareFilter.CompareOp.NOT_EQUAL, (byte[]) null);
+		latFilter.setFilterIfMissing(true);
+		
+		ResultScanner rs = this.scan(scan, null, columnList, new FilterList(lonFilter,latFilter));
+		
+		if(rs != null){		
+			List<FusionData> fusionDataList = new ArrayList<FusionData>();
+			for(Result r : rs){
+				double lon = Bytes.toDouble(r.getValue(INFO_CF, Bytes.toBytes(Constants.LON)));
+				double lat = Bytes.toDouble(r.getValue(INFO_CF, Bytes.toBytes(Constants.LAT)));
+				int noise = -1;
+				int light = -1;
+				
+				byte[] valueInByte;				
+				if((valueInByte = r.getValue(INFO_CF, Bytes.toBytes(Constants.NOISE))) != null){
+					noise = Bytes.toInt(valueInByte);
+				}				
+				if((valueInByte = r.getValue(INFO_CF, Bytes.toBytes(Constants.LIGHT))) != null){
+					light = Bytes.toInt(valueInByte);
+				}
+				
+				fusionDataList.add(new FusionData(lon,lat,noise,light));	
+			}
+			
+			rs.close();
+			
+			return fusionDataList;
+		}
+		
+		return null;
+	}
+	
+	
+	
+	
+	
+	/**
+	 * @author ytt
+	 * @param lat,lon,distance,timelimit,countlimit,userid
+	 * @return list<JSONObject>,{noise:-1,light:78}
+	 * @throws IOException 
+	 * @throws ParseException 
+	 * 
+	 * 
+	 * */
+	
+	public List<JSONObject> getlight(double lat, double lon, String time, int countlimt, 
+			double distance) throws IOException, ParseException{
+		SingleColumnValueFilter lonFilter = new SingleColumnValueFilter(INFO_CF,
+				Bytes.toBytes(Constants.LON),
+				CompareFilter.CompareOp.LESS_OR_EQUAL, Bytes.toBytes(lon + distance));
+		SingleColumnValueFilter lonFilter2 = new SingleColumnValueFilter(INFO_CF,
+				Bytes.toBytes(Constants.LON),
+				CompareFilter.CompareOp.GREATER_OR_EQUAL, Bytes.toBytes(lon - distance));
+		SingleColumnValueFilter latFilter = new SingleColumnValueFilter(
+				INFO_CF, Bytes.toBytes(Constants.LAT),
+				CompareFilter.CompareOp.LESS_OR_EQUAL, Bytes.toBytes(lat + distance));
+		SingleColumnValueFilter latFilter2 = new SingleColumnValueFilter(
+				INFO_CF, Bytes.toBytes(Constants.LAT),
+				CompareFilter.CompareOp.GREATER_OR_EQUAL, Bytes.toBytes(lat - distance));
+		final byte[] POSTFIX = new byte[]{ 0x00 };
+		Filter filter = new PageFilter(countlimt);
+		byte[] lastRow = null;
+		byte[] startRow = null;
+		int totalRows = 0;
+		int noise = -1;
+		int light = -1;
+		double lon2 = -1;
+		double lat2 = -1;
+		
+		SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
+		
+		Date timestamp = sdf.parse(time);
+		
+		timestamp = new Date(timestamp.getYear(), timestamp.getMonth(),
+				timestamp.getDate(), 0, 0, 0);
+		
+		
+		List<Column> clList = new ArrayList<Column>();
+		clList.add(new Column(INFO_CF,Bytes.toBytes(Constants.LON)));
+		clList.add(new Column(INFO_CF,Bytes.toBytes(Constants.LAT)));
+		clList.add(new Column(INFO_CF,Bytes.toBytes(Constants.LIGHT)));
+		clList.add(new Column(INFO_CF,WeatherTable.HUMI));
+		List<byte[]> cfliList = new ArrayList<byte[]>();
+		cfliList.add(INFO_CF);
+		
+		
+		List<Result> results = new ArrayList<Result>();
+		
+		while(totalRows <= countlimt){
+			Scan scan = new Scan();
+			FilterList fList = new FilterList(latFilter,latFilter2,lonFilter,lonFilter2,filter);
+			//FilterList fList = new FilterList(latFilter, lonFilter, filter);
+			if(lastRow != null){
+				startRow = Bytes.add(lastRow, POSTFIX);
+				scan.setStartRow(startRow);
+			}
+			else{
+				scan.setStartRow(generateRowKey(null, timestamp));
+			}
+			ResultScanner rs = scan(scan, cfliList, clList, fList);
+			//System.out.println("hfihioghi______" + rs.toString());
+			int localRows = 0;
+			Result result;
+			//System.out.println(rs.next());
+			while((result = rs.next()) != null){
+				//System.out.println(localRows++ + " : " + result);
+				lastRow = result.getRow();
+				results.add(result);
+				totalRows ++ ;
+				if(totalRows > countlimt) break;
+			}
+			rs.close();
+			if(localRows == 0 || totalRows == countlimt) break;
+		}
+		System.out.println("totalRows: " + totalRows);
+		List<JSONObject> joList = new ArrayList<JSONObject>();
+		
+		for(Result result : results){
+			JSONObject oJsonObject  = new JSONObject();
+			byte[] valueInByte;				
+			if((valueInByte = result.getValue(INFO_CF, Bytes.toBytes(Constants.NOISE))) != null){
+				noise = Bytes.toInt(valueInByte);
+			}		
+			if((valueInByte = result.getValue(INFO_CF, Bytes.toBytes(Constants.LIGHT))) != null){
+				light = Bytes.toInt(valueInByte);
+			}	
+			if((valueInByte = result.getValue(INFO_CF, Bytes.toBytes(Constants.LON))) != null){
+				lon2 = Bytes.toInt(valueInByte);
+			}	
+			if((valueInByte = result.getValue(INFO_CF, Bytes.toBytes(Constants.LAT))) != null){
+				lat2 = Bytes.toInt(valueInByte);
+			}	
+			
+			oJsonObject.accumulate("noise", noise);
+			oJsonObject.accumulate("light", light);
+			oJsonObject.accumulate("lon", lon2);
+			oJsonObject.accumulate("lat", lat2);
+			System.out.println(oJsonObject.toString());
+			joList.add(oJsonObject);
+		}
+		return joList;
+		
+	}
+	
+	/**
+	 * @param args
+	 * @throws ParseException 
+	 * @throws IOException 
+	 */
+	public static void main(String[] args) throws IOException, ParseException {
+		CollectionTable ct = new CollectionTable();
+		
+		for(String filePath : args){
+			System.out.println("导入"+filePath);
+			ct.importFakeData(filePath);
+			
+		}
+		
+		
+		ct.getlight(39.9995710000, 116.3193190000,"2008-12-10 02:35:13", 30, 0.0100);
+		
+	}
+		
+}

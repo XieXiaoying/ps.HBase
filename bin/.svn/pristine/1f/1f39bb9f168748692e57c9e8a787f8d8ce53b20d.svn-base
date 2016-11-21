@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- 数据库连接信息 -->
+<databaseConnection>
+	<driver>com.mysql.jdbc.Driver</driver>
+	<url>jdbc:mysql://localhost:3306/</url>
+	<dbs>
+		<db>Test</db>
+	</dbs>
+	<user>root</user>
+	<pass>root</pass>
+	<minConn>100</minConn>
+	<maxConn>100</maxConn>
+	<timeout>2000</timeout>
+</databaseConnection>
