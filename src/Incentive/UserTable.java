@@ -22,6 +22,10 @@ import org.apache.hadoop.hbase.client.Put;
 import org.apache.hadoop.hbase.client.Result;
 import org.apache.hadoop.hbase.client.ResultScanner;
 import org.apache.hadoop.hbase.client.Scan;
+import org.apache.hadoop.hbase.filter.BinaryComparator;
+import org.apache.hadoop.hbase.filter.CompareFilter;
+import org.apache.hadoop.hbase.filter.Filter;
+import org.apache.hadoop.hbase.filter.ValueFilter;
 import org.apache.hadoop.hbase.util.Bytes;
 
 import Common.AbstractTable;
@@ -46,7 +50,8 @@ public class UserTable extends AbstractTable{
 	private final static byte[] TIMES = "times".getBytes();
 	// 推送token
 	private final static byte[] TOKEN = "token".getBytes();
-	
+	// 邮箱
+	private final static byte[] EMAIL = "email".getBytes();
 	
 	private final static byte[] TRANSACTION_CF = "transaction".getBytes();
 	
@@ -99,7 +104,7 @@ public class UserTable extends AbstractTable{
 	 * @param priv
 	 * @return
 	 */
-	public Boolean set(String username,String pwd,int priv,String token){
+	public boolean set(String username,String pwd,int priv,String token){
 		Put put = new Put(username.getBytes());
 		if(pwd!=null)
 		put.add(COLFAM_NAME, PWD, pwd.getBytes());
@@ -141,8 +146,48 @@ public class UserTable extends AbstractTable{
 		return null;
 		
 	}
-	
-	
+	/**
+	 * 查找用户邮箱
+	 * @param username
+	 * @return
+	 */
+	public String getEmail(String username){
+		Get get = new Get(username.getBytes());
+		get.addColumn(COLFAM_NAME, EMAIL);
+		
+		try {
+			Result r = hTable.get(get);
+			if(!r.isEmpty()){
+				return new String(r.getValue(COLFAM_NAME, EMAIL));
+			}
+		} catch (IOException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}
+		return null;
+		
+	}
+	/*
+	 * 查找邮箱是否存在,并返回用户名，用于邮件发送及跳转链接
+	 */
+	public String getUsernameByEmail(String email) {
+		Filter filter = new ValueFilter(CompareFilter.CompareOp.EQUAL, new BinaryComparator(Bytes.toBytes(email)));
+		Scan scan = new Scan();
+		scan.setFilter(filter);
+		String userName = null;
+		try {
+			ResultScanner scanner = hTable.getScanner(scan);
+			for(Result result : scanner) {
+				for(KeyValue kv : result.raw()) {
+					userName = Bytes.toString(kv.getRow());
+				}
+			}
+			scanner.close();
+		} catch (IOException e) {
+			e.printStackTrace();
+		}
+		return userName;
+	}
 	
 	/**
 	 * 为用户username增加earn激励收入

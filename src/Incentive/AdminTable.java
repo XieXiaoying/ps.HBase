@@ -3,10 +3,19 @@ package Incentive;
 import java.io.IOException;
 
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.hbase.KeyValue;
 import org.apache.hadoop.hbase.client.Get;
 import org.apache.hadoop.hbase.client.HTable;
 import org.apache.hadoop.hbase.client.Put;
 import org.apache.hadoop.hbase.client.Result;
+import org.apache.hadoop.hbase.client.ResultScanner;
+import org.apache.hadoop.hbase.client.Scan;
+import org.apache.hadoop.hbase.filter.BinaryComparator;
+import org.apache.hadoop.hbase.filter.CompareFilter;
+import org.apache.hadoop.hbase.filter.Filter;
+import org.apache.hadoop.hbase.filter.NullComparator;
+import org.apache.hadoop.hbase.filter.ValueFilter;
+import org.apache.hadoop.hbase.util.Bytes;
 
 import collection.Constants;
 
@@ -34,7 +43,7 @@ public class AdminTable extends AbstractTable{
 	 * @param priv
 	 * @return
 	 */
-	public Boolean set(String username,String pwd,String email,String tel){
+	public boolean set(String username,String pwd,String email,String tel){
 		Put put = new Put(username.getBytes());
 		if(pwd!=null)
 		put.add(COLFAM_NAME, PWD, pwd.getBytes());
@@ -74,5 +83,52 @@ public class AdminTable extends AbstractTable{
 		}
 		return null;
 		
+	}
+	/**
+	 * 查找用户邮箱
+	 * @param username
+	 * @return
+	 */
+	public String getEmail(String username){
+		Get get = new Get(username.getBytes());
+		get.addColumn(COLFAM_NAME, EMAIL);
+		
+		try {
+			Result r = hTable.get(get);
+			if(!r.isEmpty()){
+				return new String(r.getValue(COLFAM_NAME, EMAIL));
+			}
+		} catch (IOException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}
+		return null;
+		
+	}
+	/**
+	 * 查找邮箱是否存在,并返回用户名，用于邮件发送及跳转链接
+	 */
+	public String getUsernameByEmail(String email) {
+		Filter filter = new ValueFilter(CompareFilter.CompareOp.EQUAL, new BinaryComparator(Bytes.toBytes(email)));
+		Scan scan = new Scan();
+		scan.setFilter(filter);
+		String userName = null;
+		try {
+			ResultScanner scanner = hTable.getScanner(scan);
+			for(Result result : scanner) {
+				for(KeyValue kv : result.raw()) {
+					userName = Bytes.toString(kv.getRow());
+				}
+			}
+			scanner.close();
+		} catch (IOException e) {
+			e.printStackTrace();
+		}
+		System.out.println(userName);
+		return userName;
+	}
+	public static void main(String[] args){
+		AdminTable adminTable = new AdminTable();
+		System.out.println(adminTable.getEmail("xxyd"));
 	}
 }
